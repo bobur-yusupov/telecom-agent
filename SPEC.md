@@ -7,20 +7,19 @@ A conversational agent that handles real customer requests in Uzbek, Tajik, Engl
 | **Component** | **Technology** |
 |:---|:---|
 | AI Framework | Mastra (TypeScript) |
-| Channel | Telegram Bot (telegraf.js) |
-| Runtime | Node.js |
+| Channel | Telegram Bot |
 | Data layer | In-memory JS objects (no database) |
-| Model | Gemini, Claude Sonnet, GPT models, Groq |
+| Model | Llama 4 Scout through Groq |
 | RAG | Simple keyword/cosine search over KB chunks (in-memory) |
 | Memory | Mastra Memory — short-term (thread) + long-term (persistent store) |
-| Interface languages | Tajik, Russian, Uzbek |
+| Interface languages | Uzbek, Tajik, English, Russian |
 
 ## Functional Requirements
 
 ### Scenarios
 
 SCEN-01 — Billing & payments
-User can ask about their balance, last invoice, and next payment date. Agent returns data from the user's mock profile. One write action: mark invoice as viewed.
+User can ask about their balance, last invoice, and next payment date. Agent returns data from the user's mock profile.
 
 SCEN-02 — Plan change
 User can browse available plans and switch to a different one. Agent compares plans, explains the difference, and confirms the change. Change takes effect "from next month" (mocked).
@@ -186,7 +185,6 @@ The KB consists of 24 pre-defined chunks across 6 topic groups:
 | Top-up & balance | TOP-001..004 | FAQ + KB |
 | Plans & upgrades | PLN-001..004 | FAQ + KB |
 | Technical support | TEC-001..005 | FAQ + KB |
-| Roaming | ROM-001..003 | FAQ + KB |
 | Cancellation & retention | RET-001..003 | FAQ + KB |
 
 Each chunk contains: chunk ID, topic group, question (in Tajik + Russian), answer (in Tajik + Russian), type (FAQ or KB), tool tags, and keyword tags.
@@ -220,14 +218,14 @@ Each user profile includes a preferences object that persists across sessions an
 
 ### Preference schema
 ```typescript
-typescriptpreferences: {
-  language: 'tj' | 'ru' | 'uz',        // preferred response language
-  responseLength: 'short' | 'detailed', // brevity preference
+preferences: {
+  language: 'uz' | 'tj' | 'ru' | 'en',  // preferred response language
+  responseLength: 'short' | 'detailed',   // brevity preference
   communicationStyle: 'formal' | 'casual',
-  topupReminderEnabled: boolean,         // remind when balance is low
-  lowBalanceThreshold: number,           // Somoni amount that triggers reminder
-  preferredPaymentMethod: string | null, // e.g. 'Alif Bank', 'Koronabank'
-  lastKnownIssue: string | null,         // last reported technical issue type
+  topupReminderEnabled: boolean,           // remind when balance is low
+  lowBalanceThreshold: number,             // Somoni amount that triggers reminder
+  preferredPaymentMethod: string | null,   // e.g. 'Alifmobi', 'Esxata Mobile', 'DC'
+  lastKnownIssue: string | null,           // last reported technical issue type
 }
 ```
 
@@ -272,11 +270,14 @@ This keeps the model context lean while ensuring the agent behaves like it remem
 ### Context window strategy
 The agent operates within a bounded context window. To avoid overflow in long conversations, the following strategy is applied:
 
-```
-LayerWhat it containsMax tokens (approx)
-System promptRole, rules, language instructions~500
-Memory blockSummarised user history + preferences~300KB chunksTop-3 retrieved chunks~600Conversation historyLast N messages (sliding window)~1500Current user message—~200Total~3100
-```
+|Layer|What it contains|Max tokens (approx)|
+|---|---|---|
+|System prompt|Role, rules, language instructions|~500|
+|Memory block|Summarised user history + preferences|~300|
+|Top-3 retrieved chunks|Top-3 retrieved chunks|~600|
+|Conversation history|Last 10 message pairs (sliding window)|~1500|
+|Current user message|Current user message|~200|
+Total|**Total tokens**|**~3100**|
 
 ### Sliding window
 Conversation history is trimmed to the last 10 message pairs. Older messages are dropped. If a critical fact from an older message is needed, it should already be captured in long-term memory or the current tool call result.
@@ -319,22 +320,28 @@ Note: A single well-prompted agent is sufficient for this prototype. Multi-agent
 
 The system prompt must specify:
 
-```
-Role: "You are a customer support AI agent for NovaTel, a telecom company in Tajikistan."
-Language rule: Always respond in the exact language the user writes in. Never switch languages within a reply. Uzbek uses Latin script.
-Data integrity: Never invent numbers, plan names, or prices. Always call the appropriate tool to retrieve user-specific information.
-KB usage: Before answering a general question, always search the KB first via T-19.
-Fallback: If no KB chunk matches and no tool applies, use T-18 to escalate. Never leave a dead end.
-Tone: Match the user's communication style preference. Default to polite, concise, and conversational.
-Memory awareness: Use the injected memory block to personalise responses. Do not re-offer discounts already declined.
-Identity: Never claim to be ChatGPT, GPT, or any other AI system.
-```
+- **Role**: "You are a customer support AI agent for NovaTel, a telecom company in Tajikistan."
+- **Language rule**: Always respond in the exact language the user writes in. Never switch languages within a reply. Uzbek uses Cyrillic script.
+- **Data integrity**: Never invent numbers, plan names, or prices. Always call the appropriate tool to retrieve user-specific information.
+- **KB usage**: Before answering a general question, always search the KB first via T-19.
+- **Fallback**: If no KB chunk matches and no tool applies, use T-18 to escalate. Never leave a dead end.
+- **Tone**: Match the user's communication style preference. Default to polite, concise, and conversational.
+- **Memory awareness**: Use the injected memory block to personalise responses. Do not re-offer discounts already declined.
+- **Identity**: Never claim to be ChatGPT, GPT, or any other AI system.
+
 
 ## Acceptance Criteria
 
-```
-IDCriterionHow to verifySC-01All 4 scenarios complete without errorsManual run of each scenario in TelegramSC-02Response language matches user's languageTest in Tajik, Russian, Uzbek — verify response languageSC-03Agent never invents dataAll figures must match mock profile valuesSC-04No conversation reaches a dead endEvery path ends with resolution or escalationSC-05Response arrives in under 5 secondsMeasure in TelegramSC-06Long-term memory persists across sessionsEnd session, restart conversation, verify agent remembers prior contextSC-07KB retrieval returns relevant chunksTest 10 sample questions, verify chunk relevanceSC-08User preferences affect agent behaviorChange responseLength to 'short', verify brevity
-```
+| ID | Criterion | How to verify |
+|---|---|---|
+| SC-01 | All 4 scenarios complete without errors | Manual run of each scenario in Telegram |
+| SC-02 | Response language matches user's language | Test in Tajik, Russian, Uzbek — verify response language |
+| SC-03 | Agent never invents data | All figures must match mock profile values |
+| SC-04 | No conversation reaches a dead end | Every path ends with resolution or escalation |
+| SC-05 | Response arrives in under 5 seconds | Measure in Telegram |
+| SC-06 | Long-term memory persists across sessions | End session, restart conversation, verify agent remembers prior context |
+| SC-07 | KB retrieval returns relevant chunks | Test 10 sample questions, verify chunk relevance |
+| SC-08 | User preferences affect agent behavior | Change responseLength to 'short', verify brevity |
 
 ## Out of Scope
 
@@ -347,33 +354,3 @@ IDCriterionHow to verifySC-01All 4 scenarios complete without errorsManual run o
 - Admin dashboard
 - Disk-persistent long-term memory (next iteration)
 - External embedding API for RAG (next iteration)
-
-## Suggested Project Structure
-```
-novaatel-agent/
-├── src/
-│   ├── data/
-│   │   ├── users.ts          ← 20 mock personas (defined separately)
-│   │   ├── catalog.ts        ← plans and add-ons
-│   │   └── kb.ts             ← 24 KB chunks + keyword tags
-│   ├── tools/
-│   │   ├── account.ts        ← T-01..T-03
-│   │   ├── plans.ts          ← T-04..T-08
-│   │   ├── technical.ts      ← T-09..T-12
-│   │   ├── billing.ts        ← T-13..T-15
-│   │   ├── retention.ts      ← T-16..T-18
-│   │   └── kb.ts             ← T-19
-│   ├── memory/
-│   │   ├── shortTerm.ts      ← Mastra thread context
-│   │   └── longTerm.ts       ← in-memory Map store
-│   ├── rag/
-│   │   └── retriever.ts      ← TF-IDF search over KB chunks
-│   ├── context/
-│   │   └── assembler.ts      ← builds context per turn
-│   ├── agent/
-│   │   └── index.ts          ← Mastra agent + system prompt
-│   └── bot/
-│       └── index.ts          ← Telegram bot (telegraf.js)
-├── .env                      ← TELEGRAM_TOKEN, ANTHROPIC_API_KEY
-└── package.json
-```
