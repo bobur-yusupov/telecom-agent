@@ -142,7 +142,7 @@ Add-ons:
 ```
 Telegram Bot (telegraf.js)
         ↓
-  SCEN-00 check (is user known?)
+  **SCEN-00** check (is user known?)
         ↓
   Context assembly
   (system prompt + memory block + KB chunks + history)
@@ -164,104 +164,121 @@ Telegram Bot (telegraf.js)
   Telegram reply
 ```
 
-## Tools
+### Tool access per agent
 
-All tools are pure TypeScript functions returning mock data. No external API calls.
+| Agent | Tools |
+| --- | --- |
+| **Router** | `getUserProfileById`, `getUserProfileByNumber`, `searchKB` |
+| **Billing Agent** | `getBalance`, `getInvoice`, `applyCredit`, `getPaymentMethods` |
+| **Technical Agent** | `checkOutage`, `runDiagnostic`, `createTicket`, `getTicketStatusPlans` |
+| **Plans Agent** | `listPlans`, `comparePlans`, `changePlan`, `getDataAddons`, `purchaseAddon` |
+| **Retention Agent** | `getRetentionOffers`, `applyDiscount`, `escalateToHuman` |
+| **All agents** | `updateUserPreferences`, `searchKB`, `escalateToHuman` |
+
+### Tool execution strategy
+Tools that do not depend on each other's output are called in parallel. Tools with data dependencies are called sequentially.
+
+```
+Parallel example:
+  `getUserProfileById(userId)` + `searchKB(query)` → run together at turn start
+
+Sequential example:
+  `getUserProfileById(userId)` → `getRetentionOffers(userId)`
+  (profile needed to determine churn risk before fetching offers)
+```
+
+## Tools
+All tools are pure TypeScript functions returning mocked data. No external API calls. All tools return a typed result envelope:
+```typescript
+type ToolResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: string }
+```
 
 ### User & account tools
 
 `getUserProfileByNumber(mobileNumber: string)`
-- Input - string, e.g. "987654321"
-- Output - Full mock profile object
+- Input: string, e.g. "987654321"
+- Output: full mock profile object
+- When to call: triggered by SCEN-00 when ctx.from.id matches no profile
 
 `getUserProfileById(userId: number)`
-- Input - number, user id
-- Output - Full mock profile object
+- Input: number, user ID
+- Output: full mock profile object
+- When to call: at the start of every turn for known users
 
 `getInvoice(userId: number)`
-- Input - number, user id
-- Output - invoice data
+- Input: number, user ID
+- Output: 
+```typescript
+{
+  invoiceId: string,       // e.g. "INV-2026-041"
+  period: string,          // e.g. "April 2026"
+  amount: number,          // Somoni
+  currency: "TJS",
+  status: 'paid' | 'overdue' | 'pending',
+  dueDate: string,         // ISO 8601
+  lineItems: { description: string, amount: number }[]
+}
+```
 
-`updateUserPreferences(userId, prefs)`
-- Input - number, user id and preferences object
-- Output - updated user profile object
+`updateUserPreferences(userId: number, prefs: Partial<UserPreferences>)`
+- Input: user ID + partial preferences object
+- Output: updated full preferences object
 
 ### Plan & catalog tools
 
 `listPlans()`
-- Input - none
-- Output - array of all available plans
+- Input: none
+- Output: array of all plan objects with ID, name, dataGB, callMinutes, price
 
-`comparePlans(planIdA, planIdB)`
-- Input - plan1 id, plan2 id
-- Output - Side-by-side diff object
+`comparePlans(planIdA: string, planIdB: string)`
+- Input: two plan IDs
+- Output: side-by-side diff object highlighting data, minutes, price delta
 
-`changePlan(userId, planId)`
-- Input - number, user id and plan ID
-- Output - Confirmation + effective date
+`changePlan(userId: number, planId: string)`
+- Input: user ID + plan ID
+- Output: { confirmation: string, effectiveDate: string } — effective date is always first of next month
 
 `getDataAddons()`
-- Input - none
-- Output - array of all available data addons
+- Input: none
+- Output: array of all data add-on packages with ID, dataGB, price
 
-`purchaseAddon(userId, addonId)`
+`purchaseAddon(userId: number, addonId: string)`
+- Input: user ID + add-on ID
+- Output: { confirmation: string, newDataBalanceGB: number, newBalanceSomoni: number }
 
 ### Technical support tools
 
-`checkOutage(region)`
-- Input - string, region name
-- Output - outage status: active/clear + estimated resolution
+`checkOutage(region: string)`
+- Input: region name, e.g. "Dushanbe"
+- Output:
+```typescript
+{
+  region: string,
+  status: 'active' | 'clear',
+  affectedAreas?: string[],
+  estimatedResolution?: string,   // ISO 8601, present only if status is 'active'
+  incidentId?: string
+}
+```
 
-`runDiagnostic(userId)`
-- Input - number, user id
-- Output - mocked line diagnostic result
+`runDiagnostic(userId: number)`
+- Input: user ID
+- Output: { signalStrength: 'good' | 'weak' | 'none', dataActive: boolean, simStatus: 'ok' | 'error', recommendation: string }
 
-`createTicket(userId, issue)`
-- Input - number, user id and issue description
-- Output - ticket number + estimated resolution time
+`createTicket(userId: number, issue: string)`
+- Input: user ID + issue description string
+- Output: { ticketId: string, estimatedResolutionHours: number, message: string }
 
-`getTicketStatus(ticketId)`
-- Input - number, ticket id
-- Output - current status + last update
-
-### Billing tools
-
-`getBalance(userId)`
-- Input - number, user id
-- Output - current balance in Somoni
-
-`applyCredit(userId, amount)`
-- Input - number, user id and amount
-- Output - new balance after credit
-
-`getPaymentMethods()`
-- Input - none
-- Output - list of available payment methods in Tajikistan
-
-### Retention tools
-
-`getRetentionOffers(userId)`
-- Input - number, user id
-- Output - personalized offers based on churn risk + plan
-
-`applyDiscount(userId, offerId)`
-- Input - number, user id and offer id
-- Output - confirmation + new monthly fee
-
-`escalateToHuman(userId, reason)`
-- Input - number, user id and reason
-- Output - confirmation that operator will follow up
-
-### Knowledge base tool
-
-`searchKB(query, topK)`
-- Input - natural language query + number of results
-- Output - array of matching KB chunks with relevance score
+`getTicketStatus(ticketId: string)`
+- Input: ticket ID string
+- Output: { ticketId: string, status: 'open' | 'in_progress' | 'resolved', lastUpdate: string }
 
 ## Knowledge Base & RAG
 
 ### Structure
-The KB consists of 24 pre-defined chunks across 6 topic groups:
+The KB consists of 21 pre-defined chunks across 6 topic groups:
 
 | Group | Chunk IDs | Type |
 | --- | --- | --- |
