@@ -9,35 +9,66 @@ A conversational agent that handles real customer requests in Uzbek, Tajik, Engl
 | AI Framework | Mastra (TypeScript) |
 | Channel | Telegram Bot |
 | Data layer | In-memory JS objects (no database) |
-| Model | Llama 4 Scout through Groq |
-| RAG | Simple keyword/cosine search over KB chunks (in-memory) |
-| Memory | Mastra Memory — short-term (thread) + long-term (persistent store) |
+| Model | Claude Sonnet 4.6 |
+| RAG | Cross-lingual query translation + TF-IDF cosine search over KB chunks (in-memory) |
+| Memory | Mastra Memory — short-term (thread) + long-term (in-memory Map) |
 | Interface languages | Uzbek, Tajik, English, Russian |
+
+## Model Configuration
+The model is configurable via environment variables — no code change required to swap providers:
+```
+# .env
+TELEGRAM_TOKEN=...
+ANTHROPIC_API_KEY=...
+MODEL_NAME=claude-sonnet-4-20250514   # swap to any supported model
+```
+
+Initializing model in Mastra:
+```typescript
+import { anthropic } from '@ai-sdk/anthropic'
+const model = anthropic(process.env.MODEL_NAME)
+```
 
 ## Functional Requirements
 
 ### Scenarios
 
-SCEN-01 — Billing & payments
-User can ask about their balance, last invoice, and next payment date. Agent returns data from the user's mock profile.
+**SCEN-00 - User Onboarding (first-time user)**
+1. User sends any message or `/start` command
+2. Bot checks: does ctx.from.id match any mock profile?
+3. If YES → load profile, proceed normally
+4. If NO → bot replies: "Welcome to NovaTel support. Please enter your NovaTel mobile number to continue."
+5. User replies with their number (e.g. 987654321)
+6. Bot calls `getUserProfileByNumber("987654321")`
+7. If found → link telegramId to profile, proceed normally
+8. If not found → reply: "Number not found. Please check and try again."
+9. After 3 failed attempts → call `escalateToHuman()`
 
-SCEN-02 — Plan change
-User can browse available plans and switch to a different one. Agent compares plans, explains the difference, and confirms the change. Change takes effect "from next month" (mocked).
+**SCEN-01 — Billing & payments**
+User can ask about their balance, last invoice, and next payment date. Agent calls `getInvoice()` and returns itemised data from the user's mock profile. One write action: mark invoice as viewed.
 
-SCEN-03 — Technical support
-User reports a connectivity or internet issue. Agent checks outage status for the user's region (mocked), provides basic troubleshooting steps. If unresolved, creates a ticket and returns a ticket number.
+**SCEN-02 — Plan change**
+User can browse available plans and switch to a different one. Agent calls `listPlans()`, `comparePlans()`, explains the difference, and confirms the change via `changePlan()`. Change takes effect "from next month" (mocked).
 
-SCEN-04 — Cancellation & retention
-User says they want to cancel. Agent asks for the reason, offers a discount or alternative plan. If user insists, agent confirms a human operator will follow up.
+**SCEN-03 — Technical support**
+User reports a connectivity or internet issue. Agent calls `checkOutage(user.region)` and `runDiagnostic(userId)`, provides basic troubleshooting steps. If unresolved, calls `createTicket()` and returns a ticket number to the user.
+
+**SCEN-04 — Cancellation & retention**
+User says they want to cancel. Agent follows a defined state machine (see State Management section). Asks for reason → offers discount → if declined offers alternative plan → if still declined calls `escalateToHuman()`. Agent never skips steps.
 
 ## Multilingual support
 
-The agent MUST respond in the same language as the user's last message: Uzbek, Tajik, English or Russian. If the user switches languages within a conversation, the agent should adapt. No automatic language detection — the user's current language defines the session language.
-Tajik, Russian and Uzbek use Cyrillic script.
+The agent MUST respond in the same language as the user's last message: Uzbek, Tajik, English, or Russian. If the user switches languages mid-conversation, the agent adapts immediately.
+
+Tajik, Russian, and Uzbek all use Cyrillic script. English uses Latin script.
+
+**Cross-lingual note:** KB chunks are authored in Tajik and Russian. Before running retrieval, the agent translates the user query to *Russian (I should ask this part from Muhammad Aka for further feedback)* to ensure consistent keyword overlap regardless of the user's input language. The response is then generated in the user's original language.
+
+**Uzbek/Tajik disambiguation:** Both languages use Cyrillic. Disambiguation relies on vocabulary patterns — the model is instructed to treat ambiguous inputs as Russian and ask for clarification if needed.
 
 ## User Identification
 
-Users are identified by ctx.from.id from Telegram. This ID maps to a mock profile in users.js. No login, OTP, or authentication flow is required.
+Users are identified by `ctx.from.id` from Telegram. This ID maps to a mock profile in `users.ts`. If no match is found, **SCEN-00** (onboarding) is triggered. No login, OTP, or authentication flow is required.
 
 ## Mock Data
 
@@ -46,18 +77,44 @@ Users are identified by ctx.from.id from Telegram. This ID maps to a mock profil
 20 profiles will be defined in a separate data specification document. Each profile represents a distinct real-world persona (e.g. businessman, tourist, elderly person, remote area resident, student, etc.) to ensure scenario coverage across different needs, literacy levels, and language preferences.
 
 Each profile will contain:
-```
-id, telegramId, name, persona, age,
-language (tj/ru/uz/en), region,
-plan, monthlyFee (Somoni),
-dataUsedGB, dataLimitGB,
-balance, nextBillDate, lastInvoiceAmount,
-paymentStatus (paid/overdue/pending),
-churnRisk (low/medium/high),
-openTickets, deviceType,
-preferences {}, interactionHistory []
+```typescript
+{
+  id: number,
+  telegramId: number,
+  name: string,
+  persona: string,                          // e.g. 'student', 'businessman', 'elderly'
+  age: number,
+  language: 'uz' | 'tj' | 'ru' | 'en',
+  region: string,                           // e.g. 'Dushanbe', 'Khujand', 'Kulob'
+  plan: string,                             // plan ID
+  monthlyFee: number,                       // Somoni
+  dataUsedGB: number,
+  dataLimitGB: number,
+  balance: number,                          // Somoni
+  nextBillDate: string,                     // ISO 8601
+  lastInvoiceAmount: number,
+  paymentStatus: 'paid' | 'overdue' | 'pending',
+  churnRisk: 'low' | 'medium' | 'high',
+  openTickets: number,
+  deviceType: string,                       // e.g. 'Android budget', 'iPhone', 'feature phone'
+  preferences: UserPreferences,
+  interactionHistory: InteractionRecord[],
+}
 ```
 Persona definition and full data population is deferred to the data specification phase.
+
+`InteractionRecord` schema
+```typescript
+{
+  date: string,                             // ISO 8601
+  scenario: 'onboarding' | 'billing' | 'technical' | 'plans' | 'retention',
+  resolved: boolean,
+  resolutionType: 'self-served' | 'escalated' | 'abandoned',
+  ticketId?: string,
+  planChanged?: string,                     // new plan ID if applicable
+  discountApplied?: string,                 // offer ID if applicable
+}
+```
 
 ### Service catalog
 
@@ -78,6 +135,33 @@ Add-ons:
   Extra data 3GB  — 20 Somoni
   Extra data 10GB — 55 Somoni
 
+```
+
+## Agent Architecture
+
+```
+Telegram Bot (telegraf.js)
+        ↓
+  SCEN-00 check (is user known?)
+        ↓
+  Context assembly
+  (system prompt + memory block + KB chunks + history)
+        ↓
+  Router Agent
+  — classifies intent: billing | technical | plans | retention
+        ↓
+  ┌─────────────┬──────────────┬─────────────┬──────────────────┐
+  │ Billing     │ Technical    │ Plans       │ Retention        │
+  │ Agent       │ Agent        │ Agent       │ Agent            │
+  └─────────────┴──────────────┴─────────────┴──────────────────┘
+        ↓
+  Tool calls — parallel where possible, sequential where dependent
+        ↓
+  Response generation
+        ↓
+  Memory update (event-triggered, long-term store)
+        ↓
+  Telegram reply
 ```
 
 ## Tools
@@ -277,7 +361,7 @@ The agent operates within a bounded context window. To avoid overflow in long co
 |Top-3 retrieved chunks|Top-3 retrieved chunks|~600|
 |Conversation history|Last 10 message pairs (sliding window)|~1500|
 |Current user message|Current user message|~200|
-Total|**Total tokens**|**~3100**|
+|Total|**Total tokens**|**~3100**|
 
 ### Sliding window
 Conversation history is trimmed to the last 10 message pairs. Older messages are dropped. If a critical fact from an older message is needed, it should already be captured in long-term memory or the current tool call result.
@@ -335,12 +419,12 @@ The system prompt must specify:
 | ID | Criterion | How to verify |
 |---|---|---|
 | SC-01 | All 4 scenarios complete without errors | Manual run of each scenario in Telegram |
-| SC-02 | Response language matches user's language | Test in Tajik, Russian, Uzbek — verify response language |
+| SC-02 | Response language matches user's language | Send messages in Tajik, Russian, Uzbek, English — verify response language |
 | SC-03 | Agent never invents data | All figures must match mock profile values |
-| SC-04 | No conversation reaches a dead end | Every path ends with resolution or escalation |
-| SC-05 | Response arrives in under 5 seconds | Measure in Telegram |
+| SC-04 | No conversation reaches a dead end | Every path ends with resolution or escalation to human |
+| SC-05 | Response arrives in under 5 seconds | Measure response time in Telegram |
 | SC-06 | Long-term memory persists across sessions | End session, restart conversation, verify agent remembers prior context |
-| SC-07 | KB retrieval returns relevant chunks | Test 10 sample questions, verify chunk relevance |
+| SC-07 | KB retrieval returns relevant chunks | Test 10 sample questions, verify top-3 chunks are on-topic |
 | SC-08 | User preferences affect agent behavior | Change responseLength to 'short', verify brevity |
 
 ## Out of Scope
