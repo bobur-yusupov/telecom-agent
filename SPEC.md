@@ -389,47 +389,59 @@ ESCALATED
 ```
 
 ## User Preferences
-Each user profile includes a preferences object that persists across sessions and influences agent behavior.
+Each user profile includes a preferences object that persists across sessions and influences agent behaviour.
 
 ### Preference schema
 ```typescript
 preferences: {
-  language: 'uz' | 'tj' | 'ru' | 'en',  // preferred response language
-  responseLength: 'short' | 'detailed',   // brevity preference
+  language: 'uz' | 'tj' | 'ru' | 'en',    // preferred response language
+  responseLength: 'short' | 'detailed',     // brevity preference
   communicationStyle: 'formal' | 'casual',
-  topupReminderEnabled: boolean,           // remind when balance is low
-  lowBalanceThreshold: number,             // Somoni amount that triggers reminder
-  preferredPaymentMethod: string | null,   // e.g. 'Alifmobi', 'Esxata Mobile', 'DC'
-  lastKnownIssue: string | null,           // last reported technical issue type
+  topupReminderEnabled: boolean,             // proactively warn on low balance
+  lowBalanceThreshold: number,              // Somoni — triggers low balance warning
+  preferredPaymentMethod: string | null,    // e.g. 'Alifmobi', 'Esxata Mobile', 'DC'
+  lastKnownIssue: string | null,            // last reported technical issue type
 }
 ```
 
 ### Preference usage
-The agent reads preferences at the start of every conversation and adjusts accordingly: language, tone, response length, and whether to proactively mention low balance. Preferences can be updated mid-conversation via T-03 if the user explicitly requests a change (e.g. "please be more brief").
+The agent reads preferences at the start of every conversation and adjusts language, tone, and response length accordingly. If `topupReminderEnabled` is true and `balance` < `lowBalanceThreshold`, the agent proactively mentions the low balance at the start of the conversation. Preferences can be updated mid-conversation via `updateUserPreferences()` if the user explicitly requests a change (e.g. "please be more brief").
 
 ## Memory
 
 ### Short-term memory (within session)
-Managed by Mastra's built-in thread context. Stores the full message history of the current Telegram conversation. Resets when the user starts a new session (new /start command or after a configurable inactivity timeout of 30 minutes).
-Used for: maintaining conversational coherence, avoiding repeated questions, tracking what the agent has already offered in the current session (e.g. not offering the same discount twice).
+Managed by Mastra's built-in thread context. Stores the full message history of the current Telegram conversation, plus any active state machine state (e.g. `cancellationState`).
+Resets on explicit `/start` command. No inactivity timeout — for the prototype, session continuity is preserved regardless of gap between messages. (Inactivity timeout is a production concern.)
+Used for: conversational coherence, avoiding repeated questions, tracking offers already made in the current session.
 
 ### Long-term memory (across sessions)
-Persisted in a simple in-memory store (JavaScript Map keyed by userId) that survives bot restarts during a single process run. For the prototype, this is not persisted to disk.
+Persisted in a JavaScript Map keyed by userId. Survives bot restarts during a single process run. Not persisted to disk for the prototype.
 ```typescript
 longTermMemory: {
   userId: string,
-  lastInteractionDate: string,
-  resolvedIssues: string[],         // list of previously resolved issue types
-  previousPlans: string[],          // plans the user has been on
-  offersShown: string[],            // retention offer IDs already presented
+  lastInteractionDate: string,           // ISO 8601
+  resolvedIssues: string[],              // previously resolved issue types
+  previousPlans: string[],              // plans the user has been on
+  offersShown: string[],                // retention offer IDs already presented
   totalInteractions: number,
   satisfactionSignals: ('positive' | 'negative' | 'neutral')[],
 }
 ```
-Used for: not repeating offers already rejected, recognising returning users, tailoring retention strategy based on history.
+Long-term memory write triggers
+Long-term memory is written only when one of the following events occurs — all other turns are read-only:
+
+| Event | Fields updated |
+| ------ | ------ |
+| Plan changed | `previousPlans`, `lastInteractionDate` |
+| Ticket created | `resolvedIssues` (pending), `lastInteractionDate` |
+| Ticket resolved | `resolvedIssues` (resolved) |
+| Discount applied | `offersShown`, `lastInteractionDate` |
+| Discount declined | `offersShown`, `satisfactionSignals` |
+| Session ended cleanly | `totalInteractions`, `lastInteractionDate` |
+| Positive/negative signal | `detectedsatisfactionSignals` |
 
 ### Memory injection into context
-At the start of each conversation turn, Mastra injects a summarised memory block into the system prompt context:
+At the start of each turn, a summarised memory block is injected into the agent context:
 
 ```
 [Memory]
@@ -438,7 +450,6 @@ Offers already shown: 20% discount (declined).
 User's preferred language: Russian. Style: casual, short responses.
 Current plan: Connect (50GB). Balance: 12 Somoni (low).
 ```
-This keeps the model context lean while ensuring the agent behaves like it remembers the user.
 
 ## Context Management
 
@@ -455,7 +466,7 @@ The agent operates within a bounded context window. To avoid overflow in long co
 |Total|**Total tokens**|**~3100**|
 
 ### Sliding window
-Conversation history is trimmed to the last 10 message pairs. Older messages are dropped. If a critical fact from an older message is needed, it should already be captured in long-term memory or the current tool call result.
+Conversation history is trimmed to the last 10 message pairs. Older messages are dropped. Critical facts from older messages should already be captured in long-term memory or the current tool call result.
 
 ### Context assembly order
 Every turn, the agent context is assembled in this exact order:
@@ -463,60 +474,105 @@ Every turn, the agent context is assembled in this exact order:
 ```
 1. System prompt (role + rules + language instruction)
 2. Memory block (user preferences + long-term summary)
-3. Retrieved KB chunks (from T-19, if relevant)
+3. Retrieved KB chunks (from searchKB, if relevant)
 4. Sliding window conversation history (last 10 pairs)
 5. Current user message
 ```
 
 ### Tool result handling
-Tool results are injected as assistant-side context immediately after the tool call, before the agent generates its response. They are not added to long-term memory unless explicitly flagged (e.g. a resolved ticket ID is saved to resolvedIssues).
+Tool results are injected as assistant-side context immediately after the tool call, before the agent generates its response. They are not written to long-term memory unless the event matches a write trigger defined above.
 
-## Mastra Architecture
+-------------
 
+## Error Handling
+
+### Tool error envelope
+All tools return a typed result envelope:
 ```
-Telegram Bot (telegraf.js)
-        ↓
-  Context assembly
-  (system prompt + memory block + KB chunks + history)
-        ↓
-  Mastra Agent (single agent, prototype)
-        ↓
-  Tool calls (T-01..T-19) — as needed, parallel where possible
-        ↓
-  Response generation
-        ↓
-  Memory update (long-term store)
-        ↓
-  Telegram reply
+type ToolResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: string }
 ```
-Note: A single well-prompted agent is sufficient for this prototype. Multi-agent routing is deferred to the next iteration.
+
+### Agent behaviour on failure
+- The agent must never surface raw error strings to the user.
+- On any success: false result, the agent responds with a polite apology in the user's language and automatically calls escalateToHuman(userId, error).
+- The raw error is logged to console.error for debugging.
+
+### Model/API timeout
+Anthropic API calls are wrapped in a 10-second timeout. On timeout the bot sends: "I'm having trouble right now. Please try again in a moment." No escalation is triggered for transient timeouts — the session remains active.
+
+### Telegram delivery failure
+If `ctx.reply()` throws, log the error to console and do not retry. The user can re-send their message.
+
+-------------
+
+## Telegram UX
+
+### Inline keyboards
+Binary decisions use Telegram inline keyboards instead of waiting for typed responses. This improves demo quality and reduces input errors, especially for elderly or less literate users.
+
+```typescript
+// Example: plan change confirmation
+ctx.reply('Switch to Unlimited Pro (120 Somoni/mo)?', {
+  reply_markup: {
+    inline_keyboard: [[
+      { text: '✅ Yes, switch', callback_data: 'confirm_plan_unlimited_pro' },
+      { text: '❌ No, keep current', callback_data: 'cancel_plan_change' }
+    ]]
+  }
+})
+```
+Use inline keyboards for: plan change confirmation, discount offer accept/decline, ticket creation confirmation, cancellation confirmation.
+
+### Typing indicator
+Send a typing indicator before any response that involves an LLM call or tool call:
+```typescript
+ctx.sendChatAction('typing');
+// then call agent
+```
+
+### Message length limit
+
+Telegram caps messages at 4096 characters. Responses exceeding 3800 characters must be split into multiple messages at paragraph boundaries:
+```typescript
+function splitMessage(text: string, limit = 3800): string[] {
+  // split on double newlines to avoid mid-sentence cuts
+  const paragraphs = text.split('\n\n')
+  // group into chunks under limit
+}
+```
 
 ## System Prompt Requirements
 
-The system prompt must specify:
-
-- **Role**: "You are a customer support AI agent for NovaTel, a telecom company in Tajikistan."
-- **Language rule**: Always respond in the exact language the user writes in. Never switch languages within a reply. Uzbek uses Cyrillic script.
-- **Data integrity**: Never invent numbers, plan names, or prices. Always call the appropriate tool to retrieve user-specific information.
-- **KB usage**: Before answering a general question, always search the KB first via T-19.
-- **Fallback**: If no KB chunk matches and no tool applies, use T-18 to escalate. Never leave a dead end.
-- **Tone**: Match the user's communication style preference. Default to polite, concise, and conversational.
-- **Memory awareness**: Use the injected memory block to personalise responses. Do not re-offer discounts already declined.
-- **Identity**: Never claim to be ChatGPT, GPT, or any other AI system.
+| **Role** | "You are Mirzo - a customer support AI agent for NovaTel, a telecom company in Tajikistan." |
+| **Language rule** | Respond in the exact language the user writes in. Never mix languages within a reply. Tajik, Russian, and Uzbek use Cyrillic script. |
+| **Data integrity** | Never invent numbers, plan names, or prices. Always call the appropriate tool to retrieve user-specific information. |
+| **KB usage** | Before answering any general question, search the KB via `searchKB()`. |
+| **Fallback** | If KB and tools both fail to resolve the query, call `escalateToHuman()`. Never leave a dead end. |
+| **Tone** | Match `userPreferences.communicationStyle`. Default: polite, concise, conversational. |
+| **Memory awareness** | Use the injected memory block to personalise responses. Never re-offer a discount already declined. |
+| **State** | For SCEN-04, always check cancellationState before deciding the next action. |
+| **Identity** | Never claim to be ChatGPT, GPT, or any other AI system. |
 
 
 ## Acceptance Criteria
 
-| ID | Criterion | How to verify |
-|---|---|---|
-| SC-01 | All 4 scenarios complete without errors | Manual run of each scenario in Telegram |
-| SC-02 | Response language matches user's language | Send messages in Tajik, Russian, Uzbek, English — verify response language |
-| SC-03 | Agent never invents data | All figures must match mock profile values |
-| SC-04 | No conversation reaches a dead end | Every path ends with resolution or escalation to human |
-| SC-05 | Response arrives in under 5 seconds | Measure response time in Telegram |
-| SC-06 | Long-term memory persists across sessions | End session, restart conversation, verify agent remembers prior context |
-| SC-07 | KB retrieval returns relevant chunks | Test 10 sample questions, verify top-3 chunks are on-topic |
-| SC-08 | User preferences affect agent behavior | Change responseLength to 'short', verify brevity |
+| ID | Criterion | Linked scenario | How to verify |
+|---|---|---|---|
+| SC-01 | All 4 scenarios complete without errors | SCEN-01..04 | Manual run of each scenario in Telegram |
+| SC-02 | Response language matches user's language | All | Send messages in Tajik, Russian, Uzbek, English — verify response language |
+| SC-03 | Agent never invents data | All | All figures must match mock profile values exactly |
+| SC-04 | No conversation reaches a dead end | All | Every path ends with resolution or escalateToHuman() |
+| SC-05 | Response arrives in under 5 seconds | All | Measure response time in Telegram |
+| SC-06 | Long-term memory persists across sessions | SCEN-01..04 | End session, restart conversation, verify agent recalls prior context |
+| SC-07 | KB retrieval returns relevant chunks | All | Test 10 sample questions, verify top-3 chunks are on-topic |
+| SC-08 | User preferences affect agent behaviour | All | Set responseLength: 'short', verify brevity of responses |
+| SC-09 | Onboarding flow works for unknown users | SCEN-00 | Use a Telegram ID not in mock data, verify number prompt and profile linking |
+| SC-10 | Cancellation state machine runs in correct order | SCEN-04 | Trigger cancellation, verify agent follows INIT→REASON→OFFER→ESCALATED sequence |
+| SC-11 | Inline keyboards appear for binary decisions | SCEN-02, 04 | Trigger plan change and retention offer, verify buttons appear |
+| SC-12 | Error handling — no raw errors shown to user | All | Simulate tool failure, verify polite fallback + escalation |
+
 
 ## Out of Scope
 
@@ -524,8 +580,15 @@ The system prompt must specify:
 - Authentication, OTP, or identity verification
 - Payment processing
 - Web UI of any kind
-- Multi-agent routing (next iteration)
 - Voice message support
 - Admin dashboard
 - Disk-persistent long-term memory (next iteration)
 - External embedding API for RAG (next iteration)
+- Full multi-agent orchestration with handoff protocols (next iteration)
+- Inactivity-based session timeout (next iteration)
+
+## Questions
+
+- Which language should I use for saving chunks in Knowledge Base?
+- What model should I use for the agent? Is Llama or GPT-OSS is good for prototype? Should I go with Claude?
+- Is in-process JavaScript Map enough for for long-term memory or should I use external database? Maybe SQLite?
