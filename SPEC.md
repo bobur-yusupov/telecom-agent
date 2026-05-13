@@ -9,7 +9,7 @@ A conversational agent that handles real customer requests in Uzbek, Tajik, Engl
 | AI Framework | Mastra (TypeScript) |
 | Channel | Telegram Bot |
 | Data layer | In-memory JS objects (no database) |
-| Model | Claude Sonnet 4.6 |
+| Model | Claude Sonnet 4.5 (`claude-sonnet-4-5`) |
 | RAG | Cross-lingual query translation + TF-IDF cosine search over KB chunks (in-memory) |
 | Memory | Mastra Memory — short-term (thread) + long-term (in-memory Map) |
 | Interface languages | Uzbek, Tajik, English, Russian |
@@ -20,7 +20,8 @@ The model is configurable via environment variables — no code change required 
 # .env
 TELEGRAM_TOKEN=...
 ANTHROPIC_API_KEY=...
-MODEL_NAME=claude-sonnet-4-20250514   # swap to any supported model
+MODEL_NAME=claude-sonnet-4-5    # swap to any supported model
+LOG_LEVEL=info                  # debug | info | warn | error
 ```
 
 Initializing model in Mastra:
@@ -34,15 +35,21 @@ const model = anthropic(process.env.MODEL_NAME)
 ### Scenarios
 
 **SCEN-00 - User Onboarding (first-time user)**
-1. User sends any message or `/start` command
-2. Bot checks: does ctx.from.id match any mock profile?
-3. If YES → load profile, proceed normally
-4. If NO → bot replies: "Welcome to NovaTel support. Please enter your NovaTel mobile number to continue."
-5. User replies with their number (e.g. 987654321)
-6. Bot calls `getUserProfileByNumber("987654321")`
-7. If found → link telegramId to profile, proceed normally
-8. If not found → reply: "Number not found. Please check and try again."
-9. After 3 failed attempts → call `escalateToHuman()`
+1. User sends any message or `/start` command.
+2. Bot checks: does `ctx.from.id` match any mock profile?
+3. If YES → load profile, proceed normally.
+4. If NO → bot replies with the multilingual greeting (one combined message containing all four languages, since user language is not yet known):
+   > 🇹🇯 Хуш омадед ба NovaTel! Шумораи мобилии худро ворид кунед.
+   > 🇷🇺 Добро пожаловать в NovaTel! Введите ваш мобильный номер.
+   > 🇺🇿 NovaTel'ga xush kelibsiz! Mobil raqamingizni kiriting.
+   > 🇬🇧 Welcome to NovaTel! Please enter your mobile number.
+5. User replies with their number. Bot normalises the input to a canonical 9-digit form:
+   - Accept: `987654321`, `+992987654321`, `992987654321`, `0987654321`
+   - Strip non-digits, strip leading country code `992`, strip leading `0`. If the result is not exactly 9 digits, treat as an invalid attempt (count toward the 3-attempt limit) and reply in all four languages asking for a valid number.
+6. Bot calls `getUserProfileByNumber(normalisedNumber)`.
+7. If found → link `telegramId` to profile, set user language from profile, send confirmation in that language, proceed normally.
+8. If not found → reply in all four languages: "Number not found. Please check and try again."
+9. After 3 failed attempts (invalid format or not found, combined) → call `escalateToHuman()`.
 
 **SCEN-01 — Billing & payments**
 User can ask about their balance, last invoice, and next payment date. Agent calls `getInvoice()` and returns itemised data from the user's mock profile. One write action: mark invoice as viewed.
@@ -62,7 +69,7 @@ The agent MUST respond in the same language as the user's last message: Uzbek, T
 
 Tajik, Russian, and Uzbek all use Cyrillic script. English uses Latin script.
 
-**Cross-lingual note:** KB chunks are authored in Tajik and Russian. Before running retrieval, the agent translates the user query to *Russian (I should ask this part from Muhammad Aka for further feedback)* to ensure consistent keyword overlap regardless of the user's input language. The response is then generated in the user's original language.
+**Cross-lingual retrieval:** KB chunks are authored in Tajik + Russian, but `keywordTags` on each chunk are multilingual (Tajik, Russian, English, Uzbek). TF-IDF cosine similarity runs over those multilingual tags, so retrieval works regardless of the user's input language — no pre-translation step is required. The response is generated in the user's original language directly from the retrieved Tajik/Russian chunks. If recall is poor in production testing, switch `retriever.ts` to multilingual embeddings (`multilingual-e5-large`).
 
 **Uzbek/Tajik disambiguation:** Both languages use Cyrillic. Disambiguation relies on vocabulary patterns — the model is instructed to treat ambiguous inputs as Russian and ask for clarification if needed.
 
@@ -72,9 +79,20 @@ Users are identified by `ctx.from.id` from Telegram. This ID maps to a mock prof
 
 ## Mock Data
 
-### Users - 20 personas
+### Users — 8 personas
 
-20 profiles will be defined in a separate data specification document. Each profile represents a distinct real-world persona (e.g. businessman, tourist, elderly person, remote area resident, student, etc.) to ensure scenario coverage across different needs, literacy levels, and language preferences.
+8 profiles are defined in `src/data/users.ts`. The set is sized to cover every acceptance criterion without bloat. Each persona is chosen to exercise a specific axis of the system:
+
+| # | Persona | Language | Region | Plan | Churn risk | Key signals |
+|---|---|---|---|---|---|---|
+| 1 | Tech-savvy student | Russian | Dushanbe | Connect | low | balance OK, no open tickets |
+| 2 | Elderly, low literacy | Tajik | Khujand | Starter | medium | needs short replies, casual tone |
+| 3 | Businessman | English | Dushanbe | Unlimited Pro | low | high spend, formal tone |
+| 4 | Rural resident | Tajik | Kulob | Starter | low | weak 3G coverage area, prior outage |
+| 5 | Frustrated customer | Russian | Dushanbe | Connect | high | overdue balance, declined offer history |
+| 6 | Uzbek migrant worker | Uzbek | Bokhtar | Connect | medium | roaming history, family back home |
+| 7 | Low-balance student | Tajik | Istaravshan | Starter | medium | balance below threshold, topup reminder on |
+| 8 | New user (no profile) | — | — | — | — | triggers SCEN-00 onboarding |
 
 Each profile will contain:
 ```typescript
@@ -139,44 +157,45 @@ Add-ons:
 
 ## Agent Architecture
 
+The prototype uses a **single Mastra agent** ("Mirzo") with access to all tools. Claude Sonnet 4.5 is capable of intent classification + tool selection in one pass, so a router agent is not used. If routing accuracy proves insufficient in testing, multi-agent decomposition can be revisited in v1.
+
 ```
 Telegram Bot (telegraf.js)
         ↓
-  **SCEN-00** check (is user known?)
+  SCEN-00 check (is ctx.from.id known?)
+        ↓
+  Per-chat mutex acquired (drop concurrent messages from same chat)
         ↓
   Context assembly
-  (system prompt + memory block + KB chunks + history)
+  (system prompt + memory block + KB chunks + history + current message)
         ↓
-  Router Agent
-  — classifies intent: billing | technical | plans | retention
+  Mirzo Agent — selects tools and generates response in one pass
         ↓
-  ┌─────────────┬──────────────┬─────────────┬──────────────────┐
-  │ Billing     │ Technical    │ Plans       │ Retention        │
-  │ Agent       │ Agent        │ Agent       │ Agent            │
-  └─────────────┴──────────────┴─────────────┴──────────────────┘
-        ↓
-  Tool calls — parallel where possible, sequential where dependent
+  Tool calls — Mastra runs independent calls in parallel,
+               dependent calls sequentially
         ↓
   Response generation
         ↓
-  Memory update (event-triggered, long-term store)
+  Memory update (end-of-session summary write to long-term store)
         ↓
-  Telegram reply
+  Telegram reply (with optional inline keyboard)
 ```
 
-### Tool access per agent
+### Available tools
 
-| Agent | Tools |
+All tools below are available to the agent on every turn. The model decides which to call based on the user's intent. Tools are grouped here for documentation only:
+
+| Group | Tools |
 | --- | --- |
-| **Router** | `getUserProfileById`, `getUserProfileByNumber`, `searchKB` |
-| **Billing Agent** | `getBalance`, `getInvoice`, `applyCredit`, `getPaymentMethods` |
-| **Technical Agent** | `checkOutage`, `runDiagnostic`, `createTicket`, `getTicketStatusPlans` |
-| **Plans Agent** | `listPlans`, `comparePlans`, `changePlan`, `getDataAddons`, `purchaseAddon` |
-| **Retention Agent** | `getRetentionOffers`, `applyDiscount`, `escalateToHuman` |
-| **All agents** | `updateUserPreferences`, `searchKB`, `escalateToHuman` |
+| **User & profile** | `getUserProfileById`, `getUserProfileByNumber`, `updateUserPreferences` |
+| **Billing** | `getBalance`, `getInvoice`, `applyCredit`, `getPaymentMethods` |
+| **Plans** | `listPlans`, `comparePlans`, `changePlan`, `getDataAddons`, `purchaseAddon` |
+| **Technical** | `checkOutage`, `runDiagnostic`, `createTicket`, `getTicketStatus` |
+| **Retention** | `getRetentionOffers`, `applyDiscount` |
+| **Cross-cutting** | `searchKB`, `escalateToHuman` |
 
 ### Tool execution strategy
-Tools that do not depend on each other's output are called in parallel. Tools with data dependencies are called sequentially.
+Tools that do not depend on each other's output are called in parallel by Mastra. Tools with data dependencies are called sequentially.
 
 ```
 Parallel example:
@@ -186,6 +205,9 @@ Sequential example:
   `getUserProfileById(userId)` → `getRetentionOffers(userId)`
   (profile needed to determine churn risk before fetching offers)
 ```
+
+### At-turn-start preload
+On every turn for a known user, the bot eagerly calls `getUserProfileById(userId)` and `searchKB(userMessage)` in parallel *before* invoking the agent, and injects both results into the context. This guarantees the agent always has profile + relevant KB chunks without a wasted routing round-trip.
 
 ## Tools
 All tools are pure TypeScript functions returning mocked data. No external API calls. All tools return a typed result envelope:
@@ -295,9 +317,10 @@ type ToolResult<T> =
 - Input: user ID
 - Output: array of personalised offers based on churn risk + current plan
 ```typescript
-```typescript
+[
   { offerId: "RET-20PCT-3M", description: "20% discount for 3 months", savingSomoni: 24 },
   { offerId: "RET-FREE-DATA", description: "1 free month of extra 10GB", savingSomoni: 55 }
+]
 ```
 
 `applyDiscount(userId: number, offerId: string)`
@@ -310,9 +333,9 @@ type ToolResult<T> =
 
 ### Knowledge base tool
 
-`searchKB(query: string, topK: number)`
-- Input: natural language query (pre-translated to Russian) + number of results
-- Output: array of matching KB chunks with relevance score
+`searchKB(query: string)`
+- Input: natural language query in any supported language
+- Output: top-3 matching KB chunks with relevance score (topK is fixed at 3 internally)
 ```typescript
 [{ chunkId: string, group: string, score: number, question: string, answer: string }]
 ```
@@ -322,38 +345,42 @@ type ToolResult<T> =
 ## Knowledge Base & RAG
 
 ### Structure
-The KB consists of 21 pre-defined chunks across 5 topic groups:
+The KB consists of 24 pre-defined chunks across 6 topic groups (see `FAQs.md`):
 
 | Group | Chunk IDs | Count | Type |
 | --- | --- | --- | --- |
-| Billing & payments | BIL-001..005 | 5 | FAQ + KB |
+| Billing & payments | BIL-001..004 | 4 | FAQ + KB |
 | Top-up & balance | TOP-001..004 | 4 | FAQ + KB |
 | Plans & upgrades | PLN-001..004 | 4 | FAQ + KB |
 | Technical support | TEC-001..005 | 5 | FAQ + KB |
+| Roaming & international | ROA-001..003 | 3 | FAQ + KB |
 | Cancellation & retention | RET-001..003 | 3 | FAQ + KB |
-| **Total** | | **21** | |
+| **Total** | | **23** | |
 
-Each chunk contains: chunk ID, topic group, question (Tajik + Russian), answer (Tajik + Russian), type (FAQ or KB), tool tags, keyword tags. English and Uzbek responses are generated by the model from the Tajik/Russian chunk content at inference time — chunks are not duplicated in those languages.
+Each chunk contains: `chunkId`, `group`, `question` (Tajik + Russian), `answer` (Tajik + Russian), `type` ('FAQ' or 'KB'), `toolTags` (which tools may be relevant to follow up with), `keywordTags` (multilingual — Tajik + Russian + English + Uzbek terms, used by TF-IDF).
+
+English and Uzbek responses are generated by the model from the Tajik/Russian chunk content at inference time — chunks are not duplicated in those languages.
 
 ### RAG pipeline
+```
 User message (any language)
      ↓
-Translate query to Russian (1 fast LLM call) <---> need to ask
+searchKB(query)
      ↓
-searchKB(russianQuery, topK=3)
+TF-IDF cosine similarity over pre-computed multilingual chunk vectors (built at startup)
      ↓
-TF-IDF cosine similarity over pre-computed chunk vectors (built at startup)
-     ↓
-Top-3 chunks injected into agent context
+Top-3 chunks injected into agent context (drop any with score < 0.05 as noise)
      ↓
 Agent decides:
   — answer from KB alone (general/policy questions)
   — KB + tool call combined (user-specific questions)
-  — no match → escalateToHuman()
+  — no relevant chunks + no applicable tool → escalateToHuman()
+```
 
 ### Retrieval implementation (prototype)
-On bot startup, retriever.ts builds TF-IDF vectors from each chunk's keywordTags array. This runs once synchronously before the bot accepts messages. Vectors are stored as a plain array of { chunkId, vector } objects. Cosine similarity is computed at query time across all 21 vectors — at this scale no indexing is needed.
-If retrieval quality proves insufficient for Uzbek or English queries, the next iteration will replace TF-IDF with multilingual embeddings (e.g. multilingual-e5-large).
+On bot startup, `retriever.ts` builds TF-IDF vectors from each chunk's `keywordTags` array (which contains terms in all four supported languages). This runs once synchronously before the bot accepts messages. Vectors are stored as a plain array of `{ chunkId, vector }` objects. Cosine similarity is computed at query time across all 23 vectors — at this scale no indexing is needed.
+
+If retrieval quality proves insufficient for Uzbek or English queries, the next iteration will replace TF-IDF with multilingual embeddings (e.g. `multilingual-e5-large`).
 
 ## State Management
 SCEN-04 (cancellation/retention) requires a deterministic multi-step flow. A simple state machine is stored in short-term memory per session to prevent the agent from skipping steps, looping, or forgetting what it already offered.
@@ -414,31 +441,33 @@ Managed by Mastra's built-in thread context. Stores the full message history of 
 Resets on explicit `/start` command. No inactivity timeout — for the prototype, session continuity is preserved regardless of gap between messages. (Inactivity timeout is a production concern.)
 Used for: conversational coherence, avoiding repeated questions, tracking offers already made in the current session.
 
-### Long-term memory (across sessions)
-Persisted in a JavaScript Map keyed by userId. Survives bot restarts during a single process run. Not persisted to disk for the prototype.
+### Long-term memory (across sessions, within process)
+Persisted in a `Map<userId, LongTermMemory>`. Survives across Telegram conversations within a single process run. Not persisted to disk for the prototype.
+
 ```typescript
 longTermMemory: {
-  userId: string,
+  userId: number,
   lastInteractionDate: string,           // ISO 8601
-  resolvedIssues: string[],              // previously resolved issue types
-  previousPlans: string[],              // plans the user has been on
-  offersShown: string[],                // retention offer IDs already presented
   totalInteractions: number,
+  offersShown: string[],                 // retention offer IDs already presented
+  previousPlans: string[],               // plans the user has been on
+  resolvedIssues: string[],              // issue types from createTicket calls
   satisfactionSignals: ('positive' | 'negative' | 'neutral')[],
+  summary: string,                       // 1-2 sentence agent-written recap of last session
 }
 ```
-Long-term memory write triggers
-Long-term memory is written only when one of the following events occurs — all other turns are read-only:
 
-| Event | Fields updated |
-| ------ | ------ |
-| Plan changed | `previousPlans`, `lastInteractionDate` |
-| Ticket created | `resolvedIssues` (pending), `lastInteractionDate` |
-| Ticket resolved | `resolvedIssues` (resolved) |
-| Discount applied | `offersShown`, `lastInteractionDate` |
-| Discount declined | `offersShown`, `satisfactionSignals` |
-| Session ended cleanly | `totalInteractions`, `lastInteractionDate` |
-| Positive/negative signal | `detectedsatisfactionSignals` |
+### Write policy
+For the prototype, long-term memory is written **once at session end** (see "Session end" definition below). The agent generates a 1–2 sentence `summary` of what happened, and the bot updates structural fields (`totalInteractions`, `lastInteractionDate`, plus any of `offersShown` / `previousPlans` / `resolvedIssues` / `satisfactionSignals` touched during the session). Within a session, long-term memory is read-only — all in-session continuity comes from short-term memory.
+
+### Session end definition
+A session ends when any of the following happen:
+- `escalateToHuman()` is called.
+- The cancellation state machine reaches `ESCALATED`, or a discount / plan change resolves it.
+- The user sends `/start` (force new session).
+- The user sends `/end` (explicit end).
+
+No inactivity timeout in the prototype.
 
 ### Memory injection into context
 At the start of each turn, a summarised memory block is injected into the agent context:
@@ -555,6 +584,143 @@ function splitMessage(text: string, limit = 3800): string[] {
 | **State** | For SCEN-04, always check cancellationState before deciding the next action. |
 | **Identity** | Never claim to be ChatGPT, GPT, or any other AI system. |
 
+### System prompt draft (v0)
+```
+You are Mirzo, a customer support AI agent for NovaTel — a mobile telecom operator in Tajikistan.
+
+LANGUAGE
+- Detect the user's language from their most recent message (Tajik, Russian, Uzbek, or English).
+- Respond in exactly that language. Never mix two languages in one reply.
+- Tajik, Russian, and Uzbek all use Cyrillic. If a Cyrillic message is ambiguous between Tajik and Uzbek, treat as Russian and politely ask which language the user prefers.
+
+DATA INTEGRITY
+- Never invent numbers, plan names, prices, ticket IDs, or dates. Always retrieve them via tools.
+- If you do not have a tool result or KB chunk that supports a claim, do not make the claim — ask a clarifying question or call escalateToHuman.
+
+KB AND TOOLS
+- Top-3 KB chunks are pre-loaded in the [KB] block below. Read them before deciding whether to answer or call a tool.
+- For account-specific questions (balance, invoice, ticket status, plan change), call the appropriate tool.
+- For policy / how-things-work questions, the KB block is usually sufficient.
+- Tools that don't depend on each other should be called together.
+
+MEMORY
+- Read the [Memory] block before responding. Never re-offer a discount the user has already declined (check offersShown).
+- Adapt tone and length to userPreferences.communicationStyle and userPreferences.responseLength.
+
+CANCELLATION FLOW (SCEN-04)
+- The current cancellationState is in the [Session] block. Follow it strictly:
+  INIT → ask for reason
+  REASON_ASKED → call getRetentionOffers, present best offer
+  OFFER_PRESENTED → if accepted, call applyDiscount; if declined, transition to OFFER_DECLINED
+  OFFER_DECLINED → present alternative plan via comparePlans
+  ALTERNATIVE_PRESENTED → if accepted, call changePlan; if declined, call escalateToHuman
+- Never skip a step. Never loop back unless the user explicitly restarts.
+
+BINARY DECISIONS
+- For confirmations (plan change, discount accept/decline, ticket creation, cancellation), end your reply with a marker line:
+  [ACTION: confirm_plan_<planId>]
+  [ACTION: accept_offer_<offerId> | decline_offer_<offerId>]
+  [ACTION: create_ticket | skip_ticket]
+- The bot renders these as inline keyboard buttons; do not write them into the user-visible text.
+
+ERROR HANDLING
+- If a tool returns { success: false }, apologise in the user's language and call escalateToHuman with the error reason. Never surface raw error strings.
+
+IDENTITY
+- You are Mirzo. Never claim to be ChatGPT, Claude, GPT, or any other system.
+```
+
+## Inline keyboards and callback re-entry
+
+Inline keyboards are the bot's way of capturing binary or small-N decisions. The agent does not see button taps as ordinary chat messages — they arrive as `callback_query` events.
+
+### Action markers
+The agent emits action markers at the end of a reply, e.g. `[ACTION: confirm_plan_unlimited_pro]`. A post-processor strips these markers from the user-visible text and renders them as inline keyboard buttons.
+
+### Callback handling
+When the user taps a button, the bot:
+1. Receives a `callback_query` with `callback_data` (e.g. `confirm_plan_unlimited_pro`).
+2. Calls `ctx.answerCbQuery()` to dismiss the loading spinner.
+3. Edits the original message to disable the buttons (prevent double-taps).
+4. Injects a synthetic user message into the agent context: `"[User selected: confirm_plan_unlimited_pro]"` (in English regardless of conversation language — it is metadata, not user content).
+5. Re-runs the agent turn with this synthetic message.
+
+This keeps the agent loop uniform: every turn starts with a user message, whether typed or tapped.
+
+### When to emit action markers
+- Plan change confirmation
+- Retention discount accept/decline
+- Ticket creation confirmation
+- Cancellation confirmation
+- Anywhere the alternative is "user types yes/no" — never do that, use a button.
+
+## Concurrency
+
+Telegraf delivers messages sequentially per chat, but the agent loop is async, so two messages arriving within the same turn could interleave. To prevent this:
+
+- A simple `Map<chatId, Promise<void>>` mutex per chat. New messages await the previous turn's promise before starting.
+- If a message arrives while a turn is in flight, the bot sends a typing indicator and queues the message — it is processed when the previous turn completes.
+- Per-chat queue depth is capped at 3; messages beyond that are dropped with a "please wait a moment" reply.
+
+## Logging
+
+All logs use a structured JSON envelope written to stdout. `LOG_LEVEL` env var controls verbosity.
+
+```typescript
+{
+  ts: string,                  // ISO 8601
+  level: 'debug' | 'info' | 'warn' | 'error',
+  event: string,               // 'turn.start', 'turn.end', 'tool.call', 'tool.error', 'kb.retrieve', 'agent.escalate'
+  chatId: number,
+  userId?: number,
+  scenario?: 'onboarding' | 'billing' | 'technical' | 'plans' | 'retention',
+  toolName?: string,
+  durationMs?: number,
+  error?: { message: string, stack?: string },
+}
+```
+
+Required log events:
+- `turn.start` / `turn.end` with `durationMs` (SC-05 measurement)
+- `tool.call` / `tool.error` for every tool invocation
+- `kb.retrieve` with the query, top-3 chunk IDs, and scores
+- `agent.escalate` whenever `escalateToHuman` fires
+
+## File / module layout
+
+```
+src/
+  bot/
+    telegram.ts        # telegraf bootstrap, message handler, callback_query handler, mutex
+    callbacks.ts       # action marker parser, inline keyboard renderer
+  agents/
+    mirzo.ts           # the single Mastra agent definition + system prompt
+    cancellation.ts    # state machine helpers (transitions, predicates)
+  tools/
+    user.ts            # getUserProfileById, getUserProfileByNumber, updateUserPreferences
+    billing.ts         # getBalance, getInvoice, applyCredit, getPaymentMethods
+    plans.ts           # listPlans, comparePlans, changePlan, getDataAddons, purchaseAddon
+    technical.ts       # checkOutage, runDiagnostic, createTicket, getTicketStatus
+    retention.ts       # getRetentionOffers, applyDiscount
+    common.ts          # searchKB, escalateToHuman, ToolResult envelope
+  kb/
+    chunks.ts          # the 23 KB chunks (Tajik + Russian content, multilingual keyword tags)
+    retriever.ts       # TF-IDF vectorisation at startup, cosine similarity at query time
+  memory/
+    shortTerm.ts       # Mastra thread wrapper + cancellationState
+    longTerm.ts        # Map<userId, LongTermMemory>, read/write helpers
+  data/
+    users.ts           # 8 mock personas
+    plans.ts           # plan + addon catalog
+    outages.ts         # mock outage data per region
+  context/
+    assemble.ts        # builds the system prompt + memory block + KB block + history payload
+  utils/
+    logger.ts          # structured JSON logger
+    phone.ts           # normaliseMobileNumber
+  index.ts             # entry point — boot retriever, then start bot
+```
+
 
 ## Acceptance Criteria
 
@@ -564,8 +730,8 @@ function splitMessage(text: string, limit = 3800): string[] {
 | SC-02 | Response language matches user's language | All | Send messages in Tajik, Russian, Uzbek, English — verify response language |
 | SC-03 | Agent never invents data | All | All figures must match mock profile values exactly |
 | SC-04 | No conversation reaches a dead end | All | Every path ends with resolution or escalateToHuman() |
-| SC-05 | Response arrives in under 5 seconds | All | Measure response time in Telegram |
-| SC-06 | Long-term memory persists across sessions | SCEN-01..04 | End session, restart conversation, verify agent recalls prior context |
+| SC-05 | p95 response latency under 5 seconds | All | Measure from `ctx.message` arrival to first `ctx.reply` resolution, excluding typing-indicator delay. Log every turn's duration. |
+| SC-06 | Long-term memory persists across Telegram sessions within a single process run | SCEN-01..04 | End conversation, start new conversation in same process, verify agent recalls prior context (process restart not required) |
 | SC-07 | KB retrieval returns relevant chunks | All | Test 10 sample questions, verify top-3 chunks are on-topic |
 | SC-08 | User preferences affect agent behaviour | All | Set responseLength: 'short', verify brevity of responses |
 | SC-09 | Onboarding flow works for unknown users | SCEN-00 | Use a Telegram ID not in mock data, verify number prompt and profile linking |
@@ -573,6 +739,33 @@ function splitMessage(text: string, limit = 3800): string[] {
 | SC-11 | Inline keyboards appear for binary decisions | SCEN-02, 04 | Trigger plan change and retention offer, verify buttons appear |
 | SC-12 | Error handling — no raw errors shown to user | All | Simulate tool failure, verify polite fallback + escalation |
 
+
+## Non-happy paths (must be handled)
+
+| Scenario | Edge case | Expected behaviour |
+|---|---|---|
+| SCEN-01 | User disputes invoice amount | Agent itemises via `getInvoice`, explains line items; if user still disputes, `escalateToHuman` with reason "billing dispute" |
+| SCEN-02 | User asks for a plan that does not exist | Agent calls `listPlans`, replies with available options, asks user to pick |
+| SCEN-03 | No outage AND diagnostic returns 'ok', but user insists | After 1 round of troubleshooting steps, `createTicket` with category "user-reported, diagnostic clean" |
+| SCEN-04 | User changes their mind mid-cancellation | If user says "never mind" before `ESCALATED`, agent confirms, resets `cancellationState` to `INIT`, and ends the flow politely |
+| SCEN-00 | User enters number in international format `+992...` | Phone normaliser strips country code; lookup proceeds normally |
+| All | User sends a non-text message (photo, voice) | Reply (in detected or default language): "I can only read text messages right now." Do not advance any state machine. |
+| All | Tool returns `{ success: false }` | Polite apology in user's language + `escalateToHuman(userId, error)` |
+| All | Anthropic API times out (10s) | Reply "I'm having trouble right now, please try again in a moment." Keep session active. Do not escalate. |
+
+## Demo script
+
+A single linear walkthrough that exercises every scenario × language. Use this as the integration test until automated tests exist.
+
+1. **SCEN-00 (English).** New Telegram account (persona #8). Send `/start` → expect multilingual greeting. Reply with `+992111222333` → expect "not found." Reply with `987111222` → expect Tajik greeting (persona #2's number). Confirm linkage works.
+2. **SCEN-01 (Russian).** As persona #5 (frustrated, overdue). Ask "сколько я должен?" → expect `getInvoice` call, itemised breakdown, mention of overdue status.
+3. **SCEN-02 (English).** As persona #3 (businessman). Ask "what plans do you have?" → expect `listPlans`. Ask "compare Connect and Unlimited Pro" → expect `comparePlans` + inline keyboard to switch.
+4. **SCEN-02 inline keyboard.** Tap "✅ Yes, switch" → expect `changePlan` call, confirmation with effective date "first of next month".
+5. **SCEN-03 (Tajik).** As persona #4 (rural). Ask "Интернет кор намекунад" → expect `checkOutage("Kulob")` + `runDiagnostic` in parallel. If outage active, expect ETA reply. If clean, expect troubleshooting steps; if user still complains, expect `createTicket`.
+6. **SCEN-04 (Russian).** As persona #5. Say "хочу отключить услугу" → expect cancellationState progression: INIT → REASON_ASKED → OFFER_PRESENTED (with inline keyboard). Tap decline → expect ALTERNATIVE_PRESENTED. Tap decline → expect `escalateToHuman`.
+7. **Memory check.** Without restarting the process, start a new conversation as persona #5. Ask any question → expect the agent's memory block to reference the prior session (e.g. "last time we discussed cancellation, offer declined").
+8. **Language switch mid-conversation.** As any persona, send a message in Russian then a follow-up in English → expect the response language to switch immediately.
+9. **Preferences update.** Say "please keep replies short" → expect `updateUserPreferences({ responseLength: 'short' })`, subsequent replies measurably shorter.
 
 ## Out of Scope
 
@@ -587,8 +780,8 @@ function splitMessage(text: string, limit = 3800): string[] {
 - Full multi-agent orchestration with handoff protocols (next iteration)
 - Inactivity-based session timeout (next iteration)
 
-## Questions
+## Decisions (previously open questions)
 
-- Which language should I use for saving chunks in Knowledge Base?
-- What model should I use for the agent? Is Llama or GPT-OSS is good for prototype? Should I go with Claude?
-- Is in-process JavaScript Map enough for for long-term memory or should I use external database? Maybe SQLite?
+- **KB chunk language**: Tajik + Russian for question/answer text (the two NovaTel customer-facing languages), with multilingual `keywordTags` (Tajik, Russian, Uzbek, English) to drive TF-IDF retrieval. English and Uzbek replies are generated by the model from the Tajik/Russian content at inference time. Revisit if retrieval recall is poor.
+- **Model**: Claude Sonnet 4.5 for the prototype. The four-language requirement (especially Tajik) and tool-calling fidelity are not safe to assume for smaller open models without testing. Configurable via `MODEL_NAME` if a switch is needed later.
+- **Long-term memory storage**: In-process `Map<userId, LongTermMemory>` for the prototype. SQLite is a one-day swap if persistence across process restarts becomes a demo requirement — keep the read/write helpers in `memory/longTerm.ts` so the backend can change without touching call sites.
