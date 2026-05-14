@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Telegram-based customer support AI agent called **Mirzo** for **NovaTel** (fictitious Tajikistan telecom). Handles billing, plan changes, technical support, and cancellation/retention in Uzbek, Tajik, English, and Russian. Single-agent design using Mastra + Claude Sonnet 4.5.
+Telegram-based customer support AI agent called **Mirzo** for **NovaTel** (fictitious Tajikistan telecom). Handles billing, plan changes, technical support, and cancellation/retention in Uzbek, Tajik, English, and Russian. Single-agent design using Mastra + Groq Llama 4 Scout (prototype).
 
 ## Commands
 
@@ -24,9 +24,10 @@ No test suite yet — use the demo script in `spec/SCENARIOS.md` as the manual i
 Copy `.env.example` to `.env` and fill in real values:
 ```
 TELEGRAM_TOKEN=...
-ANTHROPIC_API_KEY=...
-MODEL_NAME=claude-sonnet-4-5
+GROQ_API_KEY=...
+MODEL_NAME=meta-llama/llama-4-scout-17b-16e-instruct
 LOG_LEVEL=info
+AGENT_MODE=studio  # or telegram
 ```
 
 ## Architecture (single agent, Mastra)
@@ -43,7 +44,7 @@ Telegram (telegraf.js)
   → Session-end memory update → Telegram reply
 ```
 
-All tools available every turn. No router agent — Claude Sonnet 4.5 handles intent classification in one pass.
+All tools available every turn. No router agent — the model handles intent classification in one pass.
 
 ## Key Source Files
 

@@ -7,6 +7,8 @@ export interface OutageRecord {
 }
 
 export const outages: OutageRecord[] = [
+  { region: 'Gulakandoz', status: 'clear' },
+  { region: 'Khujand', status: 'clear' },
   {
     region: 'Kulob',
     status: 'active',
@@ -15,7 +17,6 @@ export const outages: OutageRecord[] = [
     incidentId: 'INC-2026-0512',
   },
   { region: 'Dushanbe', status: 'clear' },
-  { region: 'Khujand', status: 'clear' },
   { region: 'Bokhtar', status: 'clear' },
   { region: 'Istaravshan', status: 'clear' },
 ]

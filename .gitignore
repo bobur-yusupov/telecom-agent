@@ -1,3 +1,7 @@
+.mastra/
+mastra-memory.db
+mastra-memory.db-*
+
 # Logs
 logs
 *.log
