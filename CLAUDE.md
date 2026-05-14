@@ -4,17 +4,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Telegram-based customer support AI agent called **Mirzo** for **NovaTel**, a fictitious telecom in Tajikistan. It handles billing, plan changes, technical support, and cancellation/retention in Uzbek, Tajik, English, and Russian. The project is currently in the **specification phase** — no source code exists yet.
+Telegram-based customer support AI agent called **Mirzo** for **NovaTel** (fictitious Tajikistan telecom). Handles billing, plan changes, technical support, and cancellation/retention in Uzbek, Tajik, English, and Russian. Single-agent design using Mastra + Claude Sonnet 4.5.
 
-## Tech Stack
+## Commands
 
-- **Framework**: Mastra (TypeScript) — single-agent design, Mastra Memory for short-term + long-term context
-- **Channel**: Telegram Bot via `telegraf.js`
-- **Model**: Claude Sonnet 4.5 (`claude-sonnet-4-5` via `@ai-sdk/anthropic`) — configurable via `MODEL_NAME` env var
-- **RAG**: TF-IDF cosine similarity over in-memory KB chunks with multilingual keyword tags (built once at startup in `kb/retriever.ts`)
-- **Data layer**: In-memory JS objects only — no database, no disk persistence for prototype
+```bash
+npm run dev          # run with hot reload (tsx watch)
+npm run start        # run once (tsx)
+npm run build        # compile TypeScript → dist/
+npm run typecheck    # type-check without emitting
+npm run lint         # ESLint over src/
+npm run format       # Prettier over src/
+```
 
-## Architecture (v0 — single agent)
+No test suite yet — use the demo script in `spec/SCENARIOS.md` as the manual integration test.
+
+## Environment Setup
+
+Copy `.env.example` to `.env` and fill in real values:
+```
+TELEGRAM_TOKEN=...
+ANTHROPIC_API_KEY=...
+MODEL_NAME=claude-sonnet-4-5
+LOG_LEVEL=info
+```
+
+## Architecture (single agent, Mastra)
 
 ```
 Telegram (telegraf.js)
@@ -24,90 +39,77 @@ Telegram (telegraf.js)
   → Context assembly (system prompt + memory block + KB chunks + history + current message)
   → Mirzo agent — selects tools and generates response in one pass
   → Tool calls (parallel where independent, sequential where dependent)
-  → Response (with action markers stripped → inline keyboard)
-  → Session-end memory update (if applicable) → Telegram reply
+  → Response (action markers stripped → inline keyboard)
+  → Session-end memory update → Telegram reply
 ```
 
-**No Router Agent.** All tools are available to the single Mirzo agent every turn — Claude Sonnet 4.5 handles intent classification + tool selection in one pass. Revisit multi-agent decomposition only if routing fails in testing.
+All tools available every turn. No router agent — Claude Sonnet 4.5 handles intent classification in one pass.
 
-**No pre-translation step.** KB chunks have multilingual `keywordTags` (Tajik + Russian + Uzbek + English), so TF-IDF retrieval works directly on the user's query in any supported language.
+## Key Source Files
 
-### Tool grouping (documentation only; all tools available every turn)
-- **User & profile**: `getUserProfileById`, `getUserProfileByNumber`, `updateUserPreferences`
-- **Billing**: `getBalance`, `getInvoice`, `applyCredit`, `getPaymentMethods`
-- **Plans**: `listPlans`, `comparePlans`, `changePlan`, `getDataAddons`, `purchaseAddon`
-- **Technical**: `checkOutage`, `runDiagnostic`, `createTicket`, `getTicketStatus`
-- **Retention**: `getRetentionOffers`, `applyDiscount`
-- **Cross-cutting**: `searchKB`, `escalateToHuman`
+| File | Purpose |
+|---|---|
+| `src/index.ts` | Entry point — validates env, boots retriever, starts bot |
+| `src/bot/telegram.ts` | Telegraf bootstrap, message + callback_query handlers, mutex |
+| `src/bot/callbacks.ts` | Action marker parser, inline keyboard renderer |
+| `src/agents/mirzo.ts` | Mastra agent definition + system prompt |
+| `src/agents/cancellation.ts` | Cancellation FSM (SCEN-04) state transitions |
+| `src/tools/common.ts` | `ToolResult<T>`, `searchKB`, `escalateToHuman` |
+| `src/tools/user.ts` | `getUserProfileById`, `getUserProfileByNumber`, `updateUserPreferences` |
+| `src/tools/billing.ts` | `getBalance`, `getInvoice`, `applyCredit`, `getPaymentMethods` |
+| `src/tools/plans.ts` | `listPlans`, `comparePlans`, `changePlan`, `getDataAddons`, `purchaseAddon` |
+| `src/tools/technical.ts` | `checkOutage`, `runDiagnostic`, `createTicket`, `getTicketStatus` |
+| `src/tools/retention.ts` | `getRetentionOffers`, `applyDiscount` |
+| `src/kb/chunks.ts` | 23 KB chunks (Tajik + Russian, multilingual keywordTags) |
+| `src/kb/retriever.ts` | TF-IDF vectorisation at startup, cosine similarity at query time |
+| `src/memory/longTerm.ts` | `Map<userId, LongTermMemory>`, read/write helpers |
+| `src/memory/shortTerm.ts` | Mastra thread wrapper + cancellationState |
+| `src/context/assemble.ts` | Builds system prompt + memory block + KB + history payload |
+| `src/data/users.ts` | 8 mock personas + lookup helpers |
+| `src/data/plans.ts` | Plan + addon catalog |
+| `src/data/outages.ts` | Mock outage data per region |
+| `src/utils/logger.ts` | Structured JSON logger (`LOG_LEVEL` env) |
+| `src/utils/phone.ts` | `normaliseMobileNumber` — strips +992, leading 0, non-digits |
 
-## Key Implementation Details
+## Key Patterns
 
-### All tools return a typed envelope
+**ToolResult envelope** — every tool returns this:
 ```typescript
 type ToolResult<T> = { success: true; data: T } | { success: false; error: string }
+// helpers: ok(data), err(message) from src/tools/common.ts
 ```
-On any `success: false`, the agent must call `escalateToHuman(userId, error)` and respond with a polite apology — never surface raw error strings.
+On `success: false` → polite apology in user's language + `escalateToHuman(userId, error)`.
 
-### Context assembly order (every turn)
-1. System prompt (role + language rules + cancellation flow + action markers)
-2. Memory block (user preferences + long-term `summary` + relevant flags like `offersShown`)
-3. Top-3 KB chunks from `searchKB` (dropped if score < 0.05)
-4. Sliding window: last 10 message pairs
-5. Current user message
-
-Token budget: ~3100 tokens. See SPEC.md "Context window strategy" for per-layer limits.
-
-### Inline keyboards via action markers
-The agent emits action markers at the end of replies, e.g. `[ACTION: confirm_plan_unlimited_pro]` or `[ACTION: accept_offer_RET-20PCT-3M | decline_offer_RET-20PCT-3M]`. A post-processor in `bot/callbacks.ts` strips these from user-visible text and renders inline keyboard buttons.
-
-When the user taps a button, the bot injects a synthetic English user message `"[User selected: <callback_data>]"` and re-runs the agent turn. This keeps the loop uniform — every turn starts with a user message, typed or tapped.
-
-### Cancellation state machine (SCEN-04)
-Stored in short-term memory as `cancellationState`. States: `INIT → REASON_ASKED → OFFER_PRESENTED → OFFER_DECLINED → ALTERNATIVE_PRESENTED → ESCALATED`. The system prompt explicitly walks the agent through transitions; never skip steps or re-offer a declined discount (check `longTermMemory.offersShown`).
-
-### Long-term memory
-- Stored in a `Map<userId, LongTermMemory>` — in-process only, not persisted to disk.
-- Written **once at session end** (`escalateToHuman`, cancellation resolution, `/start`, `/end`). The agent generates a 1–2 sentence `summary`; the bot updates `totalInteractions`, `lastInteractionDate`, and any of `offersShown`/`previousPlans`/`resolvedIssues`/`satisfactionSignals` that were touched.
-- Read-only within a session — in-session continuity comes from short-term memory.
-
-### User identification & SCEN-00
-`ctx.from.id` maps to a mock profile in `src/data/users.ts`. Unknown IDs trigger SCEN-00: multilingual greeting in one combined message, user replies with phone number, `phone.ts` normalises to canonical 9-digit form (strips `+992`, leading `0`, non-digits), `getUserProfileByNumber` lookup. 3 failed attempts (invalid format or not found, combined) → `escalateToHuman()`.
-
-### Concurrency
-Per-chat `Map<chatId, Promise<void>>` mutex. New messages await prior turn before starting. Queue depth capped at 3 per chat.
-
-### Logging
-Structured JSON to stdout, `LOG_LEVEL` env var controls verbosity. Required events: `turn.start`/`turn.end` with `durationMs` (for SC-05), `tool.call`/`tool.error`, `kb.retrieve`, `agent.escalate`.
-
-### Telegram UX constraints
-- Send `ctx.sendChatAction('typing')` before any LLM or tool call.
-- Wrap all Anthropic API calls in a 10-second timeout. On timeout, reply with a transient error message — do not escalate, keep session active.
-- Split responses over 3800 chars at paragraph (`\n\n`) boundaries.
-
-### Environment variables
+**Action markers** — agent appends to replies, post-processor in `bot/callbacks.ts` strips and renders as buttons:
 ```
-TELEGRAM_TOKEN=...
-ANTHROPIC_API_KEY=...
-MODEL_NAME=claude-sonnet-4-5
-LOG_LEVEL=info
+[ACTION: confirm_plan_unlimited_pro]
+[ACTION: accept_offer_RET-20PCT-3M | decline_offer_RET-20PCT-3M]
 ```
 
-## File / module layout (planned)
+**Context assembly order** (every turn):
+1. System prompt (~500 tokens)
+2. Memory block from `longTerm.ts` (~300 tokens)
+3. Top-3 KB chunks from `searchKB` — drop if score < 0.05 (~600 tokens)
+4. Last 10 message pairs (~1500 tokens)
+5. Current user message (~200 tokens)
 
-```
-src/
-  bot/           # telegraf bootstrap, message + callback_query handlers, mutex
-  agents/        # mirzo.ts (single agent + system prompt), cancellation.ts (FSM)
-  tools/         # user, billing, plans, technical, retention, common (searchKB + escalate + ToolResult)
-  kb/            # chunks.ts (23 chunks), retriever.ts (TF-IDF)
-  memory/        # shortTerm (Mastra thread + cancellationState), longTerm (Map)
-  data/          # users.ts (8 personas), plans.ts, outages.ts
-  context/       # assemble.ts — builds system prompt + memory + KB + history
-  utils/         # logger.ts, phone.ts (normaliseMobileNumber)
-  index.ts       # entry: boot retriever, then start bot
-```
+**Long-term memory** — written once at session end only (not per-turn). Session ends on `escalateToHuman`, cancellation resolution, `/start`, or `/end`.
 
-## Key Reference Files
+**Cancellation FSM** (`src/agents/cancellation.ts`):
+`INIT → REASON_ASKED → OFFER_PRESENTED → OFFER_DECLINED → ALTERNATIVE_PRESENTED → ESCALATED`
+Never skip steps. Never re-offer a discount in `offersShown`.
 
-- `SPEC.md` — full specification: scenarios, tool signatures, KB structure, system prompt draft, file layout, demo script, non-happy paths, acceptance criteria
-- `FAQs.md` — 23 KB chunks in Tajik + Russian across 6 topic groups (Billing, Top-Up, Plans, Technical, Roaming, Cancellation/Retention) — the raw KB data source
+**Logging** — structured JSON via `logger` from `src/utils/logger.ts`. Required events: `turn.start`, `turn.end` (with `durationMs`), `tool.call`, `tool.error`, `kb.retrieve`, `agent.escalate`.
+
+**Phone normalisation** — `normaliseMobileNumber` in `src/utils/phone.ts`. Accepts `987654321`, `+992987654321`, `0987654321`. Returns 9-digit string or `null`.
+
+## Spec & Reference Docs
+
+| File | Contents |
+|---|---|
+| `SPEC.md` | Index: tech stack, decisions, out of scope |
+| `spec/SCENARIOS.md` | SCEN-00..04, multilingual rules, non-happy paths, demo script, AC |
+| `spec/ARCHITECTURE.md` | Tool signatures, RAG pipeline, FSM, memory, context window, error handling |
+| `spec/IMPLEMENTATION.md` | System prompt draft, inline keyboards, Telegram UX, concurrency, logging, file layout |
+| `spec/DATA.md` | Personas, service catalog, user/preferences/interaction schemas |
+| `FAQs.md` | Raw KB content — 23 chunks in Tajik + Russian across 6 topic groups |
