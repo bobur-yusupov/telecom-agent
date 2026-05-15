@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Telegram-based customer support AI agent called **Mirzo** for **NovaTel** (fictitious Tajikistan telecom). Handles billing, plan changes, technical support, and cancellation/retention in Uzbek, Tajik, English, and Russian. Single-agent design using Mastra + Groq Llama 4 Scout (prototype).
+Telegram-based customer support AI agent called **Mirzo** for **NovaTel** (fictitious Tajikistan telecom). Handles billing, plan changes, technical support, and cancellation/retention in Uzbek, Tajik, English, and Russian. Single-agent design using Mastra + Google Gemini 3.1 Flash Lite (prototype).
 
 ## Commands
 
@@ -24,8 +24,8 @@ No test suite yet — use the demo script in `spec/SCENARIOS.md` as the manual i
 Copy `.env.example` to `.env` and fill in real values:
 ```
 TELEGRAM_TOKEN=...
-GROQ_API_KEY=...
-MODEL_NAME=meta-llama/llama-4-scout-17b-16e-instruct
+GOOGLE_GENERATIVE_AI_API_KEY=...
+MODEL_NAME=gemini-3.1-flash-lite
 LOG_LEVEL=info
 AGENT_MODE=studio  # or telegram
 ```

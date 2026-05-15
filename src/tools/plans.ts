@@ -2,6 +2,11 @@ import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
 import { addons, getPlanById, plans } from '../data/plans.js'
 import { getUserById } from '../data/users.js'
+import {
+  getCancellationState,
+  setCancellationState,
+} from '../agents/cancellation.js'
+import { endSession } from '../memory/longTerm.js'
 import { logger } from '../utils/logger.js'
 import { err, ok, toUserId, userIdInput } from './common.js'
 
@@ -86,6 +91,25 @@ export const changePlan = createTool({
     user.plan = plan.id
     user.monthlyFee = plan.priceSomoni
     user.dataLimitGB = plan.dataGB
+
+    // Cancellation save: the user declined the retention offer and is now
+    // accepting an alternative plan. Bridge the intermediate FSM states the
+    // agent doesn't track explicitly, then close out the session.
+    const state = getCancellationState(id)
+    if (state === 'OFFER_PRESENTED' || state === 'OFFER_DECLINED' || state === 'ALTERNATIVE_PRESENTED') {
+      if (state === 'OFFER_PRESENTED') setCancellationState(id, 'OFFER_DECLINED')
+      if (getCancellationState(id) === 'OFFER_DECLINED') {
+        setCancellationState(id, 'ALTERNATIVE_PRESENTED')
+      }
+      endSession(id, {
+        scenario: 'retention',
+        resolutionType: 'self-served',
+        satisfactionSignal: 'positive',
+        previousPlanId,
+        summary: `Cancellation averted — switched ${previousPlanId} → ${plan.id}.`,
+      })
+    }
+
     return ok({
       previousPlanId,
       newPlanId: plan.id,

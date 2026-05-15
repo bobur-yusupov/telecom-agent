@@ -1,7 +1,7 @@
 import { Agent } from '@mastra/core/agent'
 import { Memory } from '@mastra/memory'
 import { LibSQLStore } from '@mastra/libsql'
-import { groq } from '@ai-sdk/groq'
+import { google } from '@ai-sdk/google'
 import {
   getUserProfileById,
   getUserProfileByNumber,
@@ -20,6 +20,14 @@ import {
   getTicketStatus,
   runDiagnostic,
 } from '../tools/technical.js'
+import {
+  applyCredit,
+  getBalance,
+  getInvoice,
+  getPaymentMethods,
+} from '../tools/billing.js'
+import { applyDiscount, getRetentionOffers } from '../tools/retention.js'
+import { escalateToHuman, searchKB } from '../tools/common.js'
 
 const memory = new Memory({
   storage: new LibSQLStore({ id: 'mirzo-memory', url: 'file:./mastra-memory.db' }),
@@ -40,11 +48,22 @@ Plans, prices, balance, add-ons, outages, payment history: ALWAYS get them from 
 
 For any technical issue (no signal, slow internet, can't make calls), call \`runDiagnostic\` first — do not guess at causes from balance or plan data alone.
 
+For general/policy questions (how to pay, refund rules, roaming, SIM replacement, etc.), call \`searchKB\` and ground your answer in the returned chunks. For account-specific questions (balance, invoice, plan), use the matching account tool.
+
 # Tools return one of:
 - \`{ success: true, data }\` → use the data.
-- \`{ success: false, error }\` → apologise briefly in the user's language, do not show the raw error, offer to escalate.
+- \`{ success: false, error }\` → apologise briefly in the user's language, do not show the raw error, then call \`escalateToHuman\` with a short reason and share the reference ID.
 
-Never call \`changePlan\`, \`purchaseAddon\`, or \`updateUserPreferences\` without explicit user confirmation in this turn or the previous turn.
+Never call \`changePlan\`, \`purchaseAddon\`, \`applyCredit\`, \`applyDiscount\`, or \`updateUserPreferences\` without explicit user confirmation in this turn or the previous turn.
+
+# Cancellation flow (when the user wants to cancel)
+Follow these steps in order — never skip:
+1. Ask **why** they want to cancel (one short question).
+2. Call \`getRetentionOffers\` and present the top offer. Ask if they accept.
+3. If accepted → \`applyDiscount\` and confirm. Done.
+4. If declined → call \`comparePlans\` against a cheaper plan and offer it as an alternative.
+5. If they still decline → call \`escalateToHuman\` with reason "cancellation_requested" and share the reference ID.
+If the user changes their mind at any point, confirm and end politely — do not push more offers.
 `.trim()
 
 const studioTail = `
@@ -73,7 +92,7 @@ export const mirzo = new Agent({
   name: 'Mirzo',
   description: 'Customer support assistant for NovaTel, a mobile operator in Tajikistan.',
   instructions,
-  model: groq(process.env.MODEL_NAME ?? 'meta-llama/llama-4-scout-17b-16e-instruct'),
+  model: google(process.env.MODEL_NAME ?? 'gemini-3.1-flash-lite'),
   tools: {
     getUserProfileById,
     getUserProfileByNumber,
@@ -87,6 +106,14 @@ export const mirzo = new Agent({
     runDiagnostic,
     createTicket,
     getTicketStatus,
+    getBalance,
+    getInvoice,
+    applyCredit,
+    getPaymentMethods,
+    getRetentionOffers,
+    applyDiscount,
+    searchKB,
+    escalateToHuman,
   },
   memory,
 })

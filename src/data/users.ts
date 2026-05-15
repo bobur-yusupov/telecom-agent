@@ -24,6 +24,7 @@ export interface InteractionRecord {
 export interface UserProfile {
   id: number
   telegramId: number
+  mobileNumber: string   // canonical 9-digit form, no country code
   name: string
   persona: string
   age: number
@@ -48,6 +49,7 @@ export const users: UserProfile[] = [
   {
     id: 1,
     telegramId: 100000001,
+    mobileNumber: '901111111',
     name: 'Алексей Смирнов',
     persona: 'student',
     age: 21,
@@ -78,6 +80,7 @@ export const users: UserProfile[] = [
   {
     id: 2,
     telegramId: 100000002,
+    mobileNumber: '902222222',
     name: 'Модар Раҳимова',
     persona: 'elderly',
     age: 67,
@@ -108,6 +111,7 @@ export const users: UserProfile[] = [
   {
     id: 3,
     telegramId: 100000003,
+    mobileNumber: '903333333',
     name: 'James Miller',
     persona: 'businessman',
     age: 38,
@@ -138,6 +142,7 @@ export const users: UserProfile[] = [
   {
     id: 4,
     telegramId: 100000004,
+    mobileNumber: '904444444',
     name: 'Давлат Мирзоев',
     persona: 'rural_resident',
     age: 44,
@@ -168,6 +173,7 @@ export const users: UserProfile[] = [
   {
     id: 5,
     telegramId: 100000005,
+    mobileNumber: '905555555',
     name: 'Наталья Петрова',
     persona: 'frustrated_customer',
     age: 34,
@@ -198,6 +204,7 @@ export const users: UserProfile[] = [
   {
     id: 6,
     telegramId: 100000006,
+    mobileNumber: '906666666',
     name: 'Бобур Юсупов',
     persona: 'migrant_worker',
     age: 29,
@@ -228,6 +235,7 @@ export const users: UserProfile[] = [
   {
     id: 7,
     telegramId: 100000007,
+    mobileNumber: '907777777',
     name: 'Ситора Назарова',
     persona: 'low_balance_student',
     age: 19,
@@ -261,6 +269,7 @@ export const users: UserProfile[] = [
 
 const byTelegramId = new Map(users.map((u) => [u.telegramId, u]))
 const byId = new Map(users.map((u) => [u.id, u]))
+const byMobileNumber = new Map(users.map((u) => [u.mobileNumber, u]))
 
 export function getUserByTelegramId(telegramId: number): UserProfile | undefined {
   return byTelegramId.get(telegramId)
@@ -271,8 +280,5 @@ export function getUserById(userId: number): UserProfile | undefined {
 }
 
 export function getUserByMobileNumber(mobileNumber: string): UserProfile | undefined {
-  // In the prototype we map by id as a stand-in for a real phone lookup.
-  // Replace with a proper phone field when personas are fully populated.
-  const numericId = parseInt(mobileNumber.slice(-1), 10)
-  return byId.get(numericId)
+  return byMobileNumber.get(mobileNumber)
 }

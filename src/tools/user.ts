@@ -52,7 +52,7 @@ function toolResultSchema<T extends z.ZodTypeAny>(dataSchema: T) {
 }
 
 function toProfileView(user: UserProfile) {
-  const { interactionHistory: _omit, ...view } = user
+  const { interactionHistory: _omitHistory, mobileNumber: _omitNumber, ...view } = user
   return view
 }
 

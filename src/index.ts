@@ -1,6 +1,6 @@
 import 'dotenv/config'
 
-const required = ['TELEGRAM_TOKEN', 'GROQ_API_KEY'] as const
+const required = ['TELEGRAM_TOKEN', 'GOOGLE_GENERATIVE_AI_API_KEY'] as const
 for (const key of required) {
   if (!process.env[key]) throw new Error(`Missing required env var: ${key}`)
 }
