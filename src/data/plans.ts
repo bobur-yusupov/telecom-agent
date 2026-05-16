@@ -1,9 +1,11 @@
+import { getPool } from '../db/client.js'
+
 export interface Plan {
   id: string
   name: string
-  dataGB: number   // -1 = unlimited
+  dataGB: number
   callMinutesExternal: number
-  callMinutesInternal: number  // -1 = unlimited
+  callMinutesInternal: number
   priceSomoni: number
 }
 
@@ -13,39 +15,64 @@ export interface DataAddon {
   priceSomoni: number
 }
 
-export const plans: Plan[] = [
-  {
-    id: 'starter',
-    name: 'Starter',
-    dataGB: 10,
-    callMinutesExternal: 50,
-    callMinutesInternal: -1,
-    priceSomoni: 45,
-  },
-  {
-    id: 'connect',
-    name: 'Connect',
-    dataGB: 50,
-    callMinutesExternal: 100,
-    callMinutesInternal: -1,
-    priceSomoni: 80,
-  },
-  {
-    id: 'unlimited_pro',
-    name: 'Unlimited Pro',
-    dataGB: -1,
-    callMinutesExternal: 100,
-    callMinutesInternal: -1,
-    priceSomoni: 120,
-  },
-]
+interface PlanRow {
+  id: string
+  name: string
+  data_gb: number
+  call_minutes_external: number
+  call_minutes_internal: number
+  price_somoni: string
+}
 
-export const addons: DataAddon[] = [
-  { id: 'data_1gb', dataGB: 1, priceSomoni: 8 },
-  { id: 'data_3gb', dataGB: 3, priceSomoni: 20 },
-  { id: 'data_10gb', dataGB: 10, priceSomoni: 55 },
-]
+interface AddonRow {
+  id: string
+  data_gb: number
+  price_somoni: string
+}
 
-export function getPlanById(id: string): Plan | undefined {
-  return plans.find((p) => p.id === id)
+function rowToPlan(row: PlanRow): Plan {
+  return {
+    id: row.id,
+    name: row.name,
+    dataGB: row.data_gb,
+    callMinutesExternal: row.call_minutes_external,
+    callMinutesInternal: row.call_minutes_internal,
+    priceSomoni: Number(row.price_somoni),
+  }
+}
+
+function rowToAddon(row: AddonRow): DataAddon {
+  return { id: row.id, dataGB: row.data_gb, priceSomoni: Number(row.price_somoni) }
+}
+
+export async function listPlans(): Promise<Plan[]> {
+  const { rows } = await getPool().query<PlanRow>(
+    `SELECT id, name, data_gb, call_minutes_external, call_minutes_internal, price_somoni
+     FROM app.plans ORDER BY price_somoni ASC`,
+  )
+  return rows.map(rowToPlan)
+}
+
+export async function getPlanById(id: string): Promise<Plan | undefined> {
+  const { rows } = await getPool().query<PlanRow>(
+    `SELECT id, name, data_gb, call_minutes_external, call_minutes_internal, price_somoni
+     FROM app.plans WHERE id = $1 LIMIT 1`,
+    [id],
+  )
+  return rows[0] ? rowToPlan(rows[0]) : undefined
+}
+
+export async function listAddons(): Promise<DataAddon[]> {
+  const { rows } = await getPool().query<AddonRow>(
+    `SELECT id, data_gb, price_somoni FROM app.addons ORDER BY data_gb ASC`,
+  )
+  return rows.map(rowToAddon)
+}
+
+export async function getAddonById(id: string): Promise<DataAddon | undefined> {
+  const { rows } = await getPool().query<AddonRow>(
+    `SELECT id, data_gb, price_somoni FROM app.addons WHERE id = $1 LIMIT 1`,
+    [id],
+  )
+  return rows[0] ? rowToAddon(rows[0]) : undefined
 }

@@ -5,8 +5,11 @@ for (const key of required) {
   if (!process.env[key]) throw new Error(`Missing required env var: ${key}`)
 }
 
-// Boot order: retriever → agent → bot
+// Boot order: db (schema + seed) → retriever (vector index + embeddings) → bot
 async function main() {
+  const { initDb } = await import('./db/init.js')
+  await initDb()
+
   const { buildRetriever } = await import('./kb/retriever.js')
   await buildRetriever()
 

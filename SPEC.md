@@ -33,7 +33,6 @@ TELEGRAM_TOKEN=...
 GOOGLE_GENERATIVE_AI_API_KEY=...
 MODEL_NAME=gemini-3.1-flash-lite              # any Google-hosted Gemini model
 LOG_LEVEL=info                                # debug | info | warn | error
-AGENT_MODE=studio                             # studio | telegram
 ```
 
 Model initialisation in Mastra:

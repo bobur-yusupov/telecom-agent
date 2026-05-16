@@ -1,12 +1,11 @@
-// 8 mock personas — see spec/DATA.md for persona rationale.
-// TODO: populate full profile values for each persona.
+import { getPool } from '../db/client.js'
 
 export interface UserPreferences {
   language: 'uz' | 'tj' | 'ru' | 'en'
   responseLength: 'short' | 'detailed'
   communicationStyle: 'formal' | 'casual'
   topupReminderEnabled: boolean
-  lowBalanceThreshold: number   // Somoni
+  lowBalanceThreshold: number
   preferredPaymentMethod: string | null
   lastKnownIssue: string | null
 }
@@ -24,7 +23,7 @@ export interface InteractionRecord {
 export interface UserProfile {
   id: number
   telegramId: number
-  mobileNumber: string   // canonical 9-digit form, no country code
+  mobileNumber: string
   name: string
   persona: string
   age: number
@@ -45,240 +44,113 @@ export interface UserProfile {
   interactionHistory: InteractionRecord[]
 }
 
-export const users: UserProfile[] = [
-  {
-    id: 1,
-    telegramId: 100000001,
-    mobileNumber: '901111111',
-    name: 'Алексей Смирнов',
-    persona: 'student',
-    age: 21,
-    language: 'ru',
-    region: 'Dushanbe',
-    plan: 'connect',
-    monthlyFee: 80,
-    dataUsedGB: 22,
-    dataLimitGB: 50,
-    balance: 45,
-    nextBillDate: '2026-06-01',
-    lastInvoiceAmount: 80,
-    paymentStatus: 'paid',
-    churnRisk: 'low',
-    openTickets: 0,
-    deviceType: 'Android mid-range',
-    preferences: {
-      language: 'ru',
-      responseLength: 'detailed',
-      communicationStyle: 'casual',
-      topupReminderEnabled: false,
-      lowBalanceThreshold: 10,
-      preferredPaymentMethod: 'Alifmobile',
-      lastKnownIssue: null,
-    },
-    interactionHistory: [],
-  },
-  {
-    id: 2,
-    telegramId: 100000002,
-    mobileNumber: '902222222',
-    name: 'Модар Раҳимова',
-    persona: 'elderly',
-    age: 67,
-    language: 'tj',
-    region: 'Khujand',
-    plan: 'starter',
-    monthlyFee: 45,
-    dataUsedGB: 2,
-    dataLimitGB: 10,
-    balance: 18,
-    nextBillDate: '2026-06-01',
-    lastInvoiceAmount: 45,
-    paymentStatus: 'paid',
-    churnRisk: 'medium',
-    openTickets: 0,
-    deviceType: 'feature phone',
-    preferences: {
-      language: 'tj',
-      responseLength: 'short',
-      communicationStyle: 'casual',
-      topupReminderEnabled: true,
-      lowBalanceThreshold: 20,
-      preferredPaymentMethod: null,
-      lastKnownIssue: null,
-    },
-    interactionHistory: [],
-  },
-  {
-    id: 3,
-    telegramId: 100000003,
-    mobileNumber: '903333333',
-    name: 'James Miller',
-    persona: 'businessman',
-    age: 38,
-    language: 'en',
-    region: 'Dushanbe',
-    plan: 'unlimited_pro',
-    monthlyFee: 120,
-    dataUsedGB: 60,
-    dataLimitGB: -1,  // unlimited
-    balance: 200,
-    nextBillDate: '2026-06-01',
-    lastInvoiceAmount: 120,
-    paymentStatus: 'paid',
-    churnRisk: 'low',
-    openTickets: 0,
-    deviceType: 'iPhone',
-    preferences: {
-      language: 'en',
-      responseLength: 'detailed',
-      communicationStyle: 'formal',
-      topupReminderEnabled: false,
-      lowBalanceThreshold: 50,
-      preferredPaymentMethod: 'DC Pay',
-      lastKnownIssue: null,
-    },
-    interactionHistory: [],
-  },
-  {
-    id: 4,
-    telegramId: 100000004,
-    mobileNumber: '904444444',
-    name: 'Давлат Мирзоев',
-    persona: 'rural_resident',
-    age: 44,
-    language: 'tj',
-    region: 'Kulob',
-    plan: 'starter',
-    monthlyFee: 45,
-    dataUsedGB: 8,
-    dataLimitGB: 10,
-    balance: 30,
-    nextBillDate: '2026-06-01',
-    lastInvoiceAmount: 45,
-    paymentStatus: 'paid',
-    churnRisk: 'low',
-    openTickets: 1,
-    deviceType: 'Android budget',
-    preferences: {
-      language: 'tj',
-      responseLength: 'short',
-      communicationStyle: 'casual',
-      topupReminderEnabled: true,
-      lowBalanceThreshold: 15,
-      preferredPaymentMethod: null,
-      lastKnownIssue: 'no_signal',
-    },
-    interactionHistory: [],
-  },
-  {
-    id: 5,
-    telegramId: 100000005,
-    mobileNumber: '905555555',
-    name: 'Наталья Петрова',
-    persona: 'frustrated_customer',
-    age: 34,
-    language: 'ru',
-    region: 'Dushanbe',
-    plan: 'connect',
-    monthlyFee: 80,
-    dataUsedGB: 50,
-    dataLimitGB: 50,
-    balance: -12,
-    nextBillDate: '2026-05-15',
-    lastInvoiceAmount: 80,
-    paymentStatus: 'overdue',
-    churnRisk: 'high',
-    openTickets: 2,
-    deviceType: 'Android mid-range',
-    preferences: {
-      language: 'ru',
-      responseLength: 'short',
-      communicationStyle: 'casual',
-      topupReminderEnabled: true,
-      lowBalanceThreshold: 20,
-      preferredPaymentMethod: 'Alifmobile',
-      lastKnownIssue: 'slow_internet',
-    },
-    interactionHistory: [],
-  },
-  {
-    id: 6,
-    telegramId: 100000006,
-    mobileNumber: '906666666',
-    name: 'Бобур Юсупов',
-    persona: 'migrant_worker',
-    age: 29,
-    language: 'uz',
-    region: 'Bokhtar',
-    plan: 'connect',
-    monthlyFee: 80,
-    dataUsedGB: 30,
-    dataLimitGB: 50,
-    balance: 55,
-    nextBillDate: '2026-06-01',
-    lastInvoiceAmount: 80,
-    paymentStatus: 'paid',
-    churnRisk: 'medium',
-    openTickets: 0,
-    deviceType: 'Android mid-range',
-    preferences: {
-      language: 'uz',
-      responseLength: 'short',
-      communicationStyle: 'casual',
-      topupReminderEnabled: true,
-      lowBalanceThreshold: 20,
-      preferredPaymentMethod: null,
-      lastKnownIssue: null,
-    },
-    interactionHistory: [],
-  },
-  {
-    id: 7,
-    telegramId: 100000007,
-    mobileNumber: '907777777',
-    name: 'Ситора Назарова',
-    persona: 'low_balance_student',
-    age: 19,
-    language: 'tj',
-    region: 'Istaravshan',
-    plan: 'starter',
-    monthlyFee: 45,
-    dataUsedGB: 9,
-    dataLimitGB: 10,
-    balance: 8,
-    nextBillDate: '2026-06-01',
-    lastInvoiceAmount: 45,
-    paymentStatus: 'pending',
-    churnRisk: 'medium',
-    openTickets: 0,
-    deviceType: 'Android budget',
-    preferences: {
-      language: 'tj',
-      responseLength: 'short',
-      communicationStyle: 'casual',
-      topupReminderEnabled: true,
-      lowBalanceThreshold: 15,
-      preferredPaymentMethod: 'Alifmobile',
-      lastKnownIssue: null,
-    },
-    interactionHistory: [],
-  },
-]
-
-// Persona #8 (new user) has no entry — unknown telegramId triggers SCEN-00.
-
-const byTelegramId = new Map(users.map((u) => [u.telegramId, u]))
-const byId = new Map(users.map((u) => [u.id, u]))
-const byMobileNumber = new Map(users.map((u) => [u.mobileNumber, u]))
-
-export function getUserByTelegramId(telegramId: number): UserProfile | undefined {
-  return byTelegramId.get(telegramId)
+interface UserRow {
+  id: number
+  telegram_id: string  // bigint comes back as string from node-postgres
+  mobile_number: string
+  name: string
+  persona: string
+  age: number
+  language: 'uz' | 'tj' | 'ru' | 'en'
+  region: string
+  plan: string
+  monthly_fee: string
+  data_used_gb: string
+  data_limit_gb: string
+  balance: string
+  next_bill_date: Date
+  last_invoice_amount: string
+  payment_status: 'paid' | 'overdue' | 'pending'
+  churn_risk: 'low' | 'medium' | 'high'
+  open_tickets: number
+  device_type: string
+  preferences: UserPreferences
+  interaction_history: InteractionRecord[]
 }
 
-export function getUserById(userId: number): UserProfile | undefined {
-  return byId.get(userId)
+function rowToProfile(row: UserRow): UserProfile {
+  return {
+    id: row.id,
+    telegramId: Number(row.telegram_id),
+    mobileNumber: row.mobile_number,
+    name: row.name,
+    persona: row.persona,
+    age: row.age,
+    language: row.language,
+    region: row.region,
+    plan: row.plan,
+    monthlyFee: Number(row.monthly_fee),
+    dataUsedGB: Number(row.data_used_gb),
+    dataLimitGB: Number(row.data_limit_gb),
+    balance: Number(row.balance),
+    nextBillDate: row.next_bill_date.toISOString().slice(0, 10),
+    lastInvoiceAmount: Number(row.last_invoice_amount),
+    paymentStatus: row.payment_status,
+    churnRisk: row.churn_risk,
+    openTickets: row.open_tickets,
+    deviceType: row.device_type,
+    preferences: row.preferences,
+    interactionHistory: row.interaction_history,
+  }
 }
 
-export function getUserByMobileNumber(mobileNumber: string): UserProfile | undefined {
-  return byMobileNumber.get(mobileNumber)
+const SELECT = `
+  SELECT id, telegram_id, mobile_number, name, persona, age, language, region,
+         plan, monthly_fee, data_used_gb, data_limit_gb, balance, next_bill_date,
+         last_invoice_amount, payment_status, churn_risk, open_tickets, device_type,
+         preferences, interaction_history
+  FROM app.users
+`
+
+export async function getUserByTelegramId(telegramId: number): Promise<UserProfile | undefined> {
+  const { rows } = await getPool().query<UserRow>(`${SELECT} WHERE telegram_id = $1 LIMIT 1`, [telegramId])
+  return rows[0] ? rowToProfile(rows[0]) : undefined
+}
+
+export async function getUserById(userId: number): Promise<UserProfile | undefined> {
+  const { rows } = await getPool().query<UserRow>(`${SELECT} WHERE id = $1 LIMIT 1`, [userId])
+  return rows[0] ? rowToProfile(rows[0]) : undefined
+}
+
+export async function getUserByMobileNumber(mobileNumber: string): Promise<UserProfile | undefined> {
+  const { rows } = await getPool().query<UserRow>(`${SELECT} WHERE mobile_number = $1 LIMIT 1`, [mobileNumber])
+  return rows[0] ? rowToProfile(rows[0]) : undefined
+}
+
+export interface UserUpdates {
+  plan?: string
+  monthlyFee?: number
+  dataLimitGB?: number
+  dataUsedGB?: number
+  balance?: number
+  paymentStatus?: 'paid' | 'overdue' | 'pending'
+  openTickets?: number
+  preferences?: UserPreferences
+}
+
+const COLUMN_MAP: Record<keyof UserUpdates, string> = {
+  plan: 'plan',
+  monthlyFee: 'monthly_fee',
+  dataLimitGB: 'data_limit_gb',
+  dataUsedGB: 'data_used_gb',
+  balance: 'balance',
+  paymentStatus: 'payment_status',
+  openTickets: 'open_tickets',
+  preferences: 'preferences',
+}
+
+export async function updateUser(userId: number, updates: UserUpdates): Promise<UserProfile | undefined> {
+  const sets: string[] = []
+  const values: unknown[] = []
+  let i = 1
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === undefined) continue
+    const col = COLUMN_MAP[key as keyof UserUpdates]
+    sets.push(`${col} = $${i++}`)
+    values.push(key === 'preferences' ? JSON.stringify(value) : value)
+  }
+  if (sets.length === 0) return getUserById(userId)
+  values.push(userId)
+  await getPool().query(`UPDATE app.users SET ${sets.join(', ')} WHERE id = $${i}`, values)
+  return getUserById(userId)
 }

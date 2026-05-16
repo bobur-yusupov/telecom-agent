@@ -1,6 +1,6 @@
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
-import { getUserById } from '../data/users.js'
+import { getUserById, updateUser } from '../data/users.js'
 import { getPlanById } from '../data/plans.js'
 import { logger } from '../utils/logger.js'
 import { err, ok, toUserId, userIdInput } from './common.js'
@@ -30,7 +30,7 @@ export const getBalance = createTool({
   execute: async ({ userId }) => {
     const id = toUserId(userId)
     logger.info({ event: 'tool.call', toolName: 'getBalance', userId: id })
-    const user = getUserById(id)
+    const user = await getUserById(id)
     if (!user) return err(`No user found with id ${id}`)
     const threshold = user.preferences.lowBalanceThreshold
     return ok({
@@ -82,12 +82,12 @@ export const getInvoice = createTool({
   execute: async ({ userId }) => {
     const id = toUserId(userId)
     logger.info({ event: 'tool.call', toolName: 'getInvoice', userId: id })
-    const user = getUserById(id)
+    const user = await getUserById(id)
     if (!user) return err(`No user found with id ${id}`)
 
     const { period, month, year } = previousBillingPeriod(user.nextBillDate)
     const invoiceId = `INV-${year}-${String(month).padStart(2, '0')}-${String(user.id).padStart(3, '0')}`
-    const plan = getPlanById(user.plan)
+    const plan = await getPlanById(user.plan)
     const planName = plan?.name ?? user.plan
 
     const lineItems: { description: string; amount: number }[] = [
@@ -129,17 +129,17 @@ export const applyCredit = createTool({
   execute: async ({ userId, amount }) => {
     const id = toUserId(userId)
     logger.info({ event: 'tool.call', toolName: 'applyCredit', userId: id, amount })
-    const user = getUserById(id)
+    const user = await getUserById(id)
     if (!user) return err(`No user found with id ${id}`)
     const previousBalance = user.balance
-    user.balance = previousBalance + amount
-    if (user.paymentStatus === 'overdue' && user.balance >= 0) {
-      user.paymentStatus = 'paid'
-    }
+    const newBalance = previousBalance + amount
+    const updates: Parameters<typeof updateUser>[1] = { balance: newBalance }
+    if (user.paymentStatus === 'overdue' && newBalance >= 0) updates.paymentStatus = 'paid'
+    await updateUser(id, updates)
     return ok({
       previousBalance,
       amountApplied: amount,
-      newBalance: user.balance,
+      newBalance,
       currency: 'TJS' as const,
     })
   },

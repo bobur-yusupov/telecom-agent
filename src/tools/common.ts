@@ -6,6 +6,7 @@ import {
   setCancellationState,
 } from '../agents/cancellation.js'
 import { endSession } from '../memory/longTerm.js'
+import { getPool } from '../db/client.js'
 import { logger } from '../utils/logger.js'
 
 export type ToolResult<T> =
@@ -66,16 +67,6 @@ export const searchKB = createTool({
   },
 })
 
-interface Escalation {
-  referenceId: string
-  userId: number
-  reason: string
-  createdAt: string
-}
-
-const escalations = new Map<string, Escalation>()
-let escalationCounter = 9000
-
 export const escalateToHuman = createTool({
   id: 'escalateToHuman',
   description:
@@ -93,16 +84,20 @@ export const escalateToHuman = createTool({
   ),
   execute: async ({ userId, reason }) => {
     const id = toUserId(userId)
-    const referenceId = `ESC-${escalationCounter++}`
-    const createdAt = new Date().toISOString()
-    escalations.set(referenceId, { referenceId, userId: id, reason, createdAt })
+    const { rows } = await getPool().query<{ reference_id: string; created_at: Date }>(
+      `INSERT INTO app.escalations (reference_id, user_id, reason)
+       VALUES ('ESC-' || nextval('app.escalations_id_seq'), $1, $2)
+       RETURNING reference_id, created_at`,
+      [id, reason],
+    )
+    const { reference_id: referenceId, created_at: createdAt } = rows[0]!
     logger.warn({ event: 'agent.escalate', userId: id, referenceId, reason })
 
-    const cancellationState = getCancellationState(id)
+    const cancellationState = await getCancellationState(id)
     if (cancellationState !== 'INIT' && cancellationState !== 'ESCALATED') {
-      setCancellationState(id, 'ESCALATED')
+      await setCancellationState(id, 'ESCALATED')
     }
-    endSession(id, {
+    await endSession(id, {
       resolutionType: 'escalated',
       satisfactionSignal: 'negative',
       summary: `Escalated to human. Reason: ${reason}. Reference: ${referenceId}.`,
@@ -111,7 +106,7 @@ export const escalateToHuman = createTool({
     return ok({
       referenceId,
       message: `A human agent will follow up. Reference: ${referenceId}.`,
-      createdAt,
+      createdAt: createdAt.toISOString(),
     })
   },
 })

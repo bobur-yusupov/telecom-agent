@@ -1,7 +1,8 @@
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
 import { getOutageByRegion } from '../data/outages.js'
-import { getUserById } from '../data/users.js'
+import { getUserById, updateUser } from '../data/users.js'
+import { getPool } from '../db/client.js'
 import { logger } from '../utils/logger.js'
 import { err, ok, toUserId, userIdInput } from './common.js'
 
@@ -30,7 +31,7 @@ export const checkOutage = createTool({
   outputSchema: toolResultSchema(outageSchema),
   execute: async ({ region }) => {
     logger.info({ event: 'tool.call', toolName: 'checkOutage', region })
-    return ok(getOutageByRegion(region))
+    return ok(await getOutageByRegion(region))
   },
 })
 
@@ -54,9 +55,9 @@ export const runDiagnostic = createTool({
   execute: async ({ userId }) => {
     const id = toUserId(userId)
     logger.info({ event: 'tool.call', toolName: 'runDiagnostic', userId: id })
-    const user = getUserById(id)
+    const user = await getUserById(id)
     if (!user) return err(`No user found with id ${id}`)
-    const outage = getOutageByRegion(user.region)
+    const outage = await getOutageByRegion(user.region)
     const dataRemainingGB =
       user.dataLimitGB === -1 ? -1 : Math.max(0, user.dataLimitGB - user.dataUsedGB)
 
@@ -82,18 +83,6 @@ export const runDiagnostic = createTool({
   },
 })
 
-interface Ticket {
-  id: string
-  userId: number
-  type: string
-  description: string
-  status: 'open' | 'in_progress' | 'resolved'
-  createdAt: string
-}
-
-const tickets = new Map<string, Ticket>()
-let ticketCounter = 1000
-
 export const createTicket = createTool({
   id: 'createTicket',
   description:
@@ -113,20 +102,20 @@ export const createTicket = createTool({
   execute: async ({ userId, type, description }) => {
     const id = toUserId(userId)
     logger.info({ event: 'tool.call', toolName: 'createTicket', userId: id, type })
-    const user = getUserById(id)
+    const user = await getUserById(id)
     if (!user) return err(`No user found with id ${id}`)
-    const ticketId = `TCK-${ticketCounter++}`
-    const ticket: Ticket = {
-      id: ticketId,
-      userId: id,
-      type,
-      description,
-      status: 'open',
-      createdAt: new Date().toISOString(),
-    }
-    tickets.set(ticketId, ticket)
-    user.openTickets += 1
-    return ok({ ticketId, status: 'open' as const, createdAt: ticket.createdAt })
+
+    const pool = getPool()
+    const { rows } = await pool.query<{ id: string; created_at: Date }>(
+      `INSERT INTO app.tickets (id, user_id, type, description, status)
+       VALUES ('TCK-' || nextval('app.tickets_id_seq'), $1, $2, $3, 'open')
+       RETURNING id, created_at`,
+      [id, type, description],
+    )
+    // nextval requires a sequence — fall back to a counter if missing.
+    const row = rows[0]!
+    await updateUser(id, { openTickets: user.openTickets + 1 })
+    return ok({ ticketId: row.id, status: 'open' as const, createdAt: row.created_at.toISOString() })
   },
 })
 
@@ -147,14 +136,24 @@ export const getTicketStatus = createTool({
   ),
   execute: async ({ ticketId }) => {
     logger.info({ event: 'tool.call', toolName: 'getTicketStatus', ticketId })
-    const ticket = tickets.get(ticketId)
-    if (!ticket) return err(`No ticket found with id ${ticketId}`)
+    const { rows } = await getPool().query<{
+      id: string
+      type: string
+      status: 'open' | 'in_progress' | 'resolved'
+      description: string
+      created_at: Date
+    }>(
+      `SELECT id, type, status, description, created_at FROM app.tickets WHERE id = $1 LIMIT 1`,
+      [ticketId],
+    )
+    if (rows.length === 0) return err(`No ticket found with id ${ticketId}`)
+    const t = rows[0]!
     return ok({
-      ticketId: ticket.id,
-      type: ticket.type,
-      status: ticket.status,
-      description: ticket.description,
-      createdAt: ticket.createdAt,
+      ticketId: t.id,
+      type: t.type,
+      status: t.status,
+      description: t.description,
+      createdAt: t.created_at.toISOString(),
     })
   },
 })

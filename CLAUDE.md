@@ -9,15 +9,24 @@ Telegram-based customer support AI agent called **Mirzo** for **NovaTel** (ficti
 ## Commands
 
 ```bash
+docker compose up -d # start Postgres + pgvector
 npm run dev          # run with hot reload (tsx watch)
 npm run start        # run once (tsx)
 npm run build        # compile TypeScript → dist/
 npm run typecheck    # type-check without emitting
 npm run lint         # ESLint over src/
 npm run format       # Prettier over src/
+npm run eval         # run scenario + grounding evals (vitest)
+npm run eval:watch   # watch mode
 ```
 
-No test suite yet — use the demo script in `spec/SCENARIOS.md` as the manual integration test.
+Postgres needs to be running before anything else — `src/index.ts` boots `initDb()` (creates schemas, runs migrations, seeds users/plans/addons/outages) and then `buildRetriever()` (creates the pgvector index, embeds + upserts the 23 KB chunks).
+
+## Evals
+
+`tests/` runs scripted conversations through the live Mirzo agent and asserts on tool calls + replies. Deterministic checks (which tool got called, in what order, language detection, no-mutation-without-confirmation) live in [tests/scenarios.eval.ts](tests/scenarios.eval.ts). One LLM-as-judge grounding check using `@mastra/evals` lives in [tests/grounding.eval.ts](tests/grounding.eval.ts).
+
+Free-tier Gemini caps at 15 RPM — the harness paces turns at 4.5s each via `EVAL_TURN_DELAY_MS`. Set `EVAL_TURN_DELAY_MS=0` on a paid tier. Full suite takes ~4 min on free tier.
 
 ## Environment Setup
 
@@ -27,21 +36,20 @@ TELEGRAM_TOKEN=...
 GOOGLE_GENERATIVE_AI_API_KEY=...
 MODEL_NAME=gemini-3.1-flash-lite
 LOG_LEVEL=info
-AGENT_MODE=studio  # or telegram
 ```
 
 ## Architecture (single agent, Mastra)
 
 ```
-Telegram (telegraf.js)
+Channel (Telegram, Mastra Studio, etc.)
   → SCEN-00 check (known user by ctx.from.id?)
   → Per-chat mutex
   → Eager preload: getUserProfileById + searchKB in parallel
   → Context assembly (system prompt + memory block + KB chunks + history + current message)
   → Mirzo agent — selects tools and generates response in one pass
   → Tool calls (parallel where independent, sequential where dependent)
-  → Response (action markers stripped → inline keyboard)
-  → Session-end memory update → Telegram reply
+  → Plain-text reply (confirmations are natural language; user replies "yes"/"no")
+  → Session-end memory update → channel reply
 ```
 
 All tools available every turn. No router agent — the model handles intent classification in one pass.
@@ -51,8 +59,7 @@ All tools available every turn. No router agent — the model handles intent cla
 | File | Purpose |
 |---|---|
 | `src/index.ts` | Entry point — validates env, boots retriever, starts bot |
-| `src/bot/telegram.ts` | Telegraf bootstrap, message + callback_query handlers, mutex |
-| `src/bot/callbacks.ts` | Action marker parser, inline keyboard renderer |
+| `src/bot/telegram.ts` | Telegraf bootstrap, message handler, mutex |
 | `src/agents/mirzo.ts` | Mastra agent definition + system prompt |
 | `src/agents/cancellation.ts` | Cancellation FSM (SCEN-04) state transitions |
 | `src/tools/common.ts` | `ToolResult<T>`, `searchKB`, `escalateToHuman` |
@@ -62,13 +69,15 @@ All tools available every turn. No router agent — the model handles intent cla
 | `src/tools/technical.ts` | `checkOutage`, `runDiagnostic`, `createTicket`, `getTicketStatus` |
 | `src/tools/retention.ts` | `getRetentionOffers`, `applyDiscount` |
 | `src/kb/chunks.ts` | 23 KB chunks (Tajik + Russian, multilingual keywordTags) |
-| `src/kb/retriever.ts` | TF-IDF vectorisation at startup, cosine similarity at query time |
-| `src/memory/longTerm.ts` | `Map<userId, LongTermMemory>`, read/write helpers |
-| `src/memory/shortTerm.ts` | Mastra thread wrapper + cancellationState |
-| `src/context/assemble.ts` | Builds system prompt + memory block + KB + history payload |
-| `src/data/users.ts` | 8 mock personas + lookup helpers |
-| `src/data/plans.ts` | Plan + addon catalog |
-| `src/data/outages.ts` | Mock outage data per region |
+| `src/kb/retriever.ts` | pgvector index + Google embeddings (text-embedding-004) at startup, cosine similarity at query time |
+| `src/memory/longTerm.ts` | Long-term memory CRUD (Postgres-backed) + `endSession` writer |
+| `src/db/client.ts` | `pg.Pool` singleton + `getPgConfig()` |
+| `src/db/schema.ts` | DDL for `app.*` tables (users, plans, addons, outages, tickets, escalations, long_term_memory, cancellation_states, session_presented_offers) |
+| `src/db/init.ts` | Runs schema + seeds users/plans/addons/outages from `src/data/seeds/` |
+| `src/data/users.ts` | Async DB-backed user repository (`getUserById`, `updateUser`, etc.) |
+| `src/data/plans.ts` | Async DB-backed plan + addon repository |
+| `src/data/outages.ts` | Async DB-backed outage repository |
+| `src/data/seeds/*.ts` | Mock data arrays — single source of truth for `initDb` seeding |
 | `src/utils/logger.ts` | Structured JSON logger (`LOG_LEVEL` env) |
 | `src/utils/phone.ts` | `normaliseMobileNumber` — strips +992, leading 0, non-digits |
 
@@ -81,11 +90,7 @@ type ToolResult<T> = { success: true; data: T } | { success: false; error: strin
 ```
 On `success: false` → polite apology in user's language + `escalateToHuman(userId, error)`.
 
-**Action markers** — agent appends to replies, post-processor in `bot/callbacks.ts` strips and renders as buttons:
-```
-[ACTION: confirm_plan_unlimited_pro]
-[ACTION: accept_offer_RET-20PCT-3M | decline_offer_RET-20PCT-3M]
-```
+**Confirmations** — agent asks in plain language ("Shall I switch you to Connect? Reply yes to confirm.") and waits for a natural-language reply. Destructive tools (`changePlan`, `purchaseAddon`, `applyCredit`, `applyDiscount`, `updateUserPreferences`) are only invoked after explicit user confirmation.
 
 **Context assembly order** (every turn):
 1. System prompt (~500 tokens)

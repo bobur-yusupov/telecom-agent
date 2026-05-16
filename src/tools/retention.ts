@@ -1,6 +1,6 @@
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
-import { getUserById } from '../data/users.js'
+import { getUserById, updateUser } from '../data/users.js'
 import {
   endSession,
   getLongTermMemory,
@@ -86,10 +86,11 @@ export const getRetentionOffers = createTool({
   execute: async ({ userId }) => {
     const id = toUserId(userId)
     logger.info({ event: 'tool.call', toolName: 'getRetentionOffers', userId: id })
-    const user = getUserById(id)
+    const user = await getUserById(id)
     if (!user) return err(`No user found with id ${id}`)
 
-    const alreadyShown = new Set(getLongTermMemory(id)?.offersShown ?? [])
+    const memory = await getLongTermMemory(id)
+    const alreadyShown = new Set(memory?.offersShown ?? [])
     const onUnlimited = user.dataLimitGB === -1
 
     const eligible = OFFER_CATALOG.filter((offer) => {
@@ -112,14 +113,14 @@ export const getRetentionOffers = createTool({
     // the model didn't pre-call any state-tracking helper. If the prior state
     // is OFFER_DECLINED (re-offering after decline), this is a no-op — we keep
     // moving forward through the FSM in advance helpers.
-    const current = getCancellationState(id)
-    if (current === 'INIT') setCancellationState(id, 'REASON_ASKED')
-    if (getCancellationState(id) === 'REASON_ASKED') {
-      setCancellationState(id, 'OFFER_PRESENTED')
+    const current = await getCancellationState(id)
+    if (current === 'INIT') await setCancellationState(id, 'REASON_ASKED')
+    if ((await getCancellationState(id)) === 'REASON_ASKED') {
+      await setCancellationState(id, 'OFFER_PRESENTED')
     }
 
     for (const offer of view) {
-      recordPresentedOffer(id, offer.offerId)
+      await recordPresentedOffer(id, offer.offerId)
     }
 
     return ok(view)
@@ -148,42 +149,48 @@ export const applyDiscount = createTool({
   execute: async ({ userId, offerId }) => {
     const id = toUserId(userId)
     logger.info({ event: 'tool.call', toolName: 'applyDiscount', userId: id, offerId })
-    const user = getUserById(id)
+    const user = await getUserById(id)
     if (!user) return err(`No user found with id ${id}`)
     const offer = OFFER_CATALOG.find((o) => o.offerId === offerId)
     if (!offer) return err(`Unknown offer id: ${offerId}`)
 
     const previousMonthlyFee = user.monthlyFee
+    let newMonthlyFee = previousMonthlyFee
+    let newDataLimitGB = user.dataLimitGB
+    let newBalance = user.balance
+    let newPaymentStatus = user.paymentStatus
     let validUntil = new Date()
 
     switch (offer.kind) {
       case 'percent_discount': {
-        const discounted = Math.round(previousMonthlyFee * (1 - (offer.percent ?? 0) / 100))
-        user.monthlyFee = discounted
+        newMonthlyFee = Math.round(previousMonthlyFee * (1 - (offer.percent ?? 0) / 100))
         validUntil = new Date()
         validUntil.setUTCMonth(validUntil.getUTCMonth() + offer.durationMonths)
         break
       }
       case 'bonus_data': {
-        if (user.dataLimitGB !== -1) user.dataLimitGB += offer.bonusGB ?? 0
+        if (user.dataLimitGB !== -1) newDataLimitGB = user.dataLimitGB + (offer.bonusGB ?? 0)
         validUntil = new Date()
         validUntil.setUTCMonth(validUntil.getUTCMonth() + offer.durationMonths)
         break
       }
       case 'account_credit': {
-        user.balance += offer.creditSomoni ?? 0
-        if (user.paymentStatus === 'overdue' && user.balance >= 0) user.paymentStatus = 'paid'
+        newBalance = user.balance + (offer.creditSomoni ?? 0)
+        if (user.paymentStatus === 'overdue' && newBalance >= 0) newPaymentStatus = 'paid'
         break
       }
     }
 
-    recordPresentedOffer(id, offerId)
+    await updateUser(id, {
+      monthlyFee: newMonthlyFee,
+      dataLimitGB: newDataLimitGB,
+      balance: newBalance,
+      paymentStatus: newPaymentStatus,
+    })
+    await recordPresentedOffer(id, offerId)
 
-    // If the user was in the cancellation flow, accepting an offer ends the
-    // session as a retention save. Outside cancellation (e.g. proactive offer)
-    // we leave the session open.
-    if (isInCancellationFlow(id)) {
-      endSession(id, {
+    if (await isInCancellationFlow(id)) {
+      await endSession(id, {
         scenario: 'retention',
         resolutionType: 'self-served',
         satisfactionSignal: 'positive',
@@ -195,9 +202,9 @@ export const applyDiscount = createTool({
       offerId,
       kind: offer.kind,
       previousMonthlyFee,
-      newMonthlyFee: user.monthlyFee,
-      newBalance: user.balance,
-      newDataLimitGB: user.dataLimitGB,
+      newMonthlyFee,
+      newBalance,
+      newDataLimitGB,
       validUntil: validUntil.toISOString().slice(0, 10),
     })
   },

@@ -1,7 +1,7 @@
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
-import { addons, getPlanById, plans } from '../data/plans.js'
-import { getUserById } from '../data/users.js'
+import { getAddonById, getPlanById, listAddons, listPlans as listPlansFromDb } from '../data/plans.js'
+import { getUserById, updateUser } from '../data/users.js'
 import {
   getCancellationState,
   setCancellationState,
@@ -42,7 +42,7 @@ export const listPlans = createTool({
   outputSchema: toolResultSchema(z.array(planSchema)),
   execute: async () => {
     logger.info({ event: 'tool.call', toolName: 'listPlans' })
-    return ok(plans)
+    return ok(await listPlansFromDb())
   },
 })
 
@@ -56,10 +56,10 @@ export const comparePlans = createTool({
   outputSchema: toolResultSchema(z.array(planSchema)),
   execute: async ({ planIds }) => {
     logger.info({ event: 'tool.call', toolName: 'comparePlans', planIds })
-    const found = planIds.map((id) => getPlanById(id)).filter((p): p is NonNullable<typeof p> => !!p)
-    const missing = planIds.filter((id) => !getPlanById(id))
+    const resolved = await Promise.all(planIds.map(async (id) => ({ id, plan: await getPlanById(id) })))
+    const missing = resolved.filter((r) => !r.plan).map((r) => r.id)
     if (missing.length > 0) return err(`Unknown plan id(s): ${missing.join(', ')}`)
-    return ok(found)
+    return ok(resolved.map((r) => r.plan!))
   },
 })
 
@@ -82,26 +82,28 @@ export const changePlan = createTool({
   execute: async ({ userId, newPlanId }) => {
     const id = toUserId(userId)
     logger.info({ event: 'tool.call', toolName: 'changePlan', userId: id, newPlanId })
-    const user = getUserById(id)
+    const user = await getUserById(id)
     if (!user) return err(`No user found with id ${id}`)
-    const plan = getPlanById(newPlanId)
+    const plan = await getPlanById(newPlanId)
     if (!plan) return err(`Unknown plan id: ${newPlanId}`)
     if (user.plan === newPlanId) return err(`User is already on plan ${newPlanId}`)
     const previousPlanId = user.plan
-    user.plan = plan.id
-    user.monthlyFee = plan.priceSomoni
-    user.dataLimitGB = plan.dataGB
+    await updateUser(id, {
+      plan: plan.id,
+      monthlyFee: plan.priceSomoni,
+      dataLimitGB: plan.dataGB,
+    })
 
     // Cancellation save: the user declined the retention offer and is now
     // accepting an alternative plan. Bridge the intermediate FSM states the
     // agent doesn't track explicitly, then close out the session.
-    const state = getCancellationState(id)
+    const state = await getCancellationState(id)
     if (state === 'OFFER_PRESENTED' || state === 'OFFER_DECLINED' || state === 'ALTERNATIVE_PRESENTED') {
-      if (state === 'OFFER_PRESENTED') setCancellationState(id, 'OFFER_DECLINED')
-      if (getCancellationState(id) === 'OFFER_DECLINED') {
-        setCancellationState(id, 'ALTERNATIVE_PRESENTED')
+      if (state === 'OFFER_PRESENTED') await setCancellationState(id, 'OFFER_DECLINED')
+      if ((await getCancellationState(id)) === 'OFFER_DECLINED') {
+        await setCancellationState(id, 'ALTERNATIVE_PRESENTED')
       }
-      endSession(id, {
+      await endSession(id, {
         scenario: 'retention',
         resolutionType: 'self-served',
         satisfactionSignal: 'positive',
@@ -127,7 +129,7 @@ export const getDataAddons = createTool({
   outputSchema: toolResultSchema(z.array(addonSchema)),
   execute: async () => {
     logger.info({ event: 'tool.call', toolName: 'getDataAddons' })
-    return ok(addons)
+    return ok(await listAddons())
   },
 })
 
@@ -150,19 +152,20 @@ export const purchaseAddon = createTool({
   execute: async ({ userId, addonId }) => {
     const id = toUserId(userId)
     logger.info({ event: 'tool.call', toolName: 'purchaseAddon', userId: id, addonId })
-    const user = getUserById(id)
+    const user = await getUserById(id)
     if (!user) return err(`No user found with id ${id}`)
-    const addon = addons.find((a) => a.id === addonId)
+    const addon = await getAddonById(addonId)
     if (!addon) return err(`Unknown addon id: ${addonId}`)
     if (user.dataLimitGB === -1) {
       return err('User is on an unlimited plan; data add-ons are not applicable.')
     }
-    user.dataLimitGB += addon.dataGB
+    const newDataLimitGB = user.dataLimitGB + addon.dataGB
+    await updateUser(id, { dataLimitGB: newDataLimitGB })
     return ok({
       addonId: addon.id,
       addedGB: addon.dataGB,
       chargedSomoni: addon.priceSomoni,
-      newDataLimitGB: user.dataLimitGB,
+      newDataLimitGB,
     })
   },
 })

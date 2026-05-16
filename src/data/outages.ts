@@ -1,29 +1,35 @@
+import { getPool } from '../db/client.js'
+
 export interface OutageRecord {
   region: string
   status: 'active' | 'clear'
   affectedAreas?: string[]
-  estimatedResolution?: string  // ISO 8601
+  estimatedResolution?: string
   incidentId?: string
 }
 
-export const outages: OutageRecord[] = [
-  { region: 'Gulakandoz', status: 'clear' },
-  { region: 'Khujand', status: 'clear' },
-  {
-    region: 'Kulob',
-    status: 'active',
-    affectedAreas: ['Kulob city centre', 'Vose district'],
-    estimatedResolution: '2026-05-14T18:00:00Z',
-    incidentId: 'INC-2026-0512',
-  },
-  { region: 'Dushanbe', status: 'clear' },
-  { region: 'Bokhtar', status: 'clear' },
-  { region: 'Istaravshan', status: 'clear' },
-]
+interface OutageRow {
+  region: string
+  status: 'active' | 'clear'
+  affected_areas: string[] | null
+  estimated_resolution: Date | null
+  incident_id: string | null
+}
 
-export function getOutageByRegion(region: string): OutageRecord {
-  return outages.find((o) => o.region.toLowerCase() === region.toLowerCase()) ?? {
-    region,
-    status: 'clear',
-  }
+function rowToRecord(row: OutageRow): OutageRecord {
+  const record: OutageRecord = { region: row.region, status: row.status }
+  if (row.affected_areas) record.affectedAreas = row.affected_areas
+  if (row.estimated_resolution) record.estimatedResolution = row.estimated_resolution.toISOString()
+  if (row.incident_id) record.incidentId = row.incident_id
+  return record
+}
+
+export async function getOutageByRegion(region: string): Promise<OutageRecord> {
+  const { rows } = await getPool().query<OutageRow>(
+    `SELECT region, status, affected_areas, estimated_resolution, incident_id
+     FROM app.outages WHERE LOWER(region) = LOWER($1) LIMIT 1`,
+    [region],
+  )
+  if (rows.length === 0) return { region, status: 'clear' }
+  return rowToRecord(rows[0]!)
 }

@@ -1,3 +1,4 @@
+import { getPool } from '../db/client.js'
 import { logger } from '../utils/logger.js'
 
 export type CancellationState =
@@ -17,19 +18,24 @@ const VALID_NEXT: Record<CancellationState, readonly CancellationState[]> = {
   ESCALATED: [],
 }
 
-const states = new Map<number, CancellationState>()
-
-export function getCancellationState(userId: number): CancellationState {
-  return states.get(userId) ?? 'INIT'
+export async function getCancellationState(userId: number): Promise<CancellationState> {
+  const { rows } = await getPool().query<{ state: CancellationState }>(
+    `SELECT state FROM app.cancellation_states WHERE user_id = $1 LIMIT 1`,
+    [userId],
+  )
+  return rows[0]?.state ?? 'INIT'
 }
 
-export function isInCancellationFlow(userId: number): boolean {
-  const s = getCancellationState(userId)
+export async function isInCancellationFlow(userId: number): Promise<boolean> {
+  const s = await getCancellationState(userId)
   return s !== 'INIT'
 }
 
-export function setCancellationState(userId: number, next: CancellationState): boolean {
-  const current = getCancellationState(userId)
+export async function setCancellationState(
+  userId: number,
+  next: CancellationState,
+): Promise<boolean> {
+  const current = await getCancellationState(userId)
   if (current === next) return true
   if (!VALID_NEXT[current].includes(next)) {
     logger.warn({
@@ -39,17 +45,15 @@ export function setCancellationState(userId: number, next: CancellationState): b
     })
     return false
   }
-  states.set(userId, next)
+  await getPool().query(
+    `INSERT INTO app.cancellation_states (user_id, state, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (user_id) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()`,
+    [userId, next],
+  )
   return true
 }
 
-export function advanceThrough(userId: number, path: readonly CancellationState[]): boolean {
-  for (const step of path) {
-    if (!setCancellationState(userId, step)) return false
-  }
-  return true
-}
-
-export function resetCancellationState(userId: number): void {
-  states.delete(userId)
+export async function resetCancellationState(userId: number): Promise<void> {
+  await getPool().query(`DELETE FROM app.cancellation_states WHERE user_id = $1`, [userId])
 }

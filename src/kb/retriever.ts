@@ -1,62 +1,64 @@
-// Builds TF-IDF vectors from chunk keywordTags at startup.
-// Called once before the bot accepts messages.
-import type { KBChunk } from './chunks.js'
+import { embed, embedMany } from 'ai'
+import { google } from '@ai-sdk/google'
+import { PgVector } from '@mastra/pg'
+import { getPgConfig } from '../db/client.js'
+import { logger } from '../utils/logger.js'
 
-interface ChunkVector {
-  chunkId: string
-  vector: Map<string, number>
-}
+const INDEX_NAME = 'kb_chunks'
+// text-embedding-004 emits 768-dim vectors.
+const EMBEDDING_DIMENSION = 768
 
-let index: ChunkVector[] = []
+const embeddingModel = google.textEmbeddingModel(
+  process.env.EMBEDDING_MODEL ?? 'text-embedding-004',
+)
 
-function tf(term: string, tags: string[]): number {
-  const count = tags.filter((t) => t === term).length
-  return count / tags.length
-}
+let vectorStore: PgVector | undefined
 
-function buildVector(tags: string[], idf: Map<string, number>): Map<string, number> {
-  const vec = new Map<string, number>()
-  const unique = [...new Set(tags)]
-  for (const term of unique) {
-    vec.set(term, tf(term, tags) * (idf.get(term) ?? 0))
+function getVectorStore(): PgVector {
+  if (!vectorStore) {
+    vectorStore = new PgVector({
+      id: 'mirzo-kb',
+      schemaName: 'vectors',
+      ...getPgConfig(),
+    })
   }
-  return vec
+  return vectorStore
 }
 
-function cosineSimilarity(a: Map<string, number>, b: Map<string, number>): number {
-  let dot = 0
-  let normA = 0
-  let normB = 0
-  for (const [term, valA] of a) {
-    dot += valA * (b.get(term) ?? 0)
-    normA += valA ** 2
-  }
-  for (const valB of b.values()) normB += valB ** 2
-  const denom = Math.sqrt(normA) * Math.sqrt(normB)
-  return denom === 0 ? 0 : dot / denom
+function chunkText(chunk: { question: string; answer: string; keywordTags: string[] }): string {
+  return [chunk.question, chunk.answer, chunk.keywordTags.join(' ')].join('\n')
 }
 
+/**
+ * Idempotent: creates the pgvector index if missing, then embeds and upserts
+ * every chunk. Uses chunkId as the vector id so re-runs replace existing rows.
+ */
 export async function buildRetriever(): Promise<void> {
   const { chunks } = await import('./chunks.js')
+  const store = getVectorStore()
 
-  // Compute IDF across all chunks
-  const df = new Map<string, number>()
-  for (const chunk of chunks) {
-    for (const term of new Set(chunk.keywordTags)) {
-      df.set(term, (df.get(term) ?? 0) + 1)
-    }
-  }
-  const idf = new Map<string, number>()
-  for (const [term, freq] of df) {
-    idf.set(term, Math.log(chunks.length / freq))
-  }
+  await store.createIndex({
+    indexName: INDEX_NAME,
+    dimension: EMBEDDING_DIMENSION,
+    metric: 'cosine',
+  })
 
-  index = chunks.map((chunk) => ({
-    chunkId: chunk.chunkId,
-    vector: buildVector(chunk.keywordTags, idf),
-  }))
+  const values = chunks.map(chunkText)
+  const { embeddings } = await embedMany({ model: embeddingModel, values })
 
-  console.info(`[retriever] indexed ${index.length} chunks`)
+  await store.upsert({
+    indexName: INDEX_NAME,
+    vectors: embeddings,
+    ids: chunks.map((c) => c.chunkId),
+    metadata: chunks.map((c) => ({
+      chunkId: c.chunkId,
+      group: c.group,
+      question: c.question,
+      answer: c.answer,
+    })),
+  })
+
+  logger.info({ event: 'kb.retrieve', message: 'indexed', count: chunks.length })
 }
 
 export interface SearchResult {
@@ -68,29 +70,21 @@ export interface SearchResult {
 }
 
 export async function searchKB(query: string, topK = 3): Promise<SearchResult[]> {
-  const { chunks } = await import('./chunks.js')
-  const chunkMap = new Map<string, KBChunk>(chunks.map((c) => [c.chunkId, c]))
+  const store = getVectorStore()
+  const { embedding } = await embed({ model: embeddingModel, value: query })
 
-  // Tokenise the query the same way as keywordTags (lowercase words)
-  const queryTerms = query.toLowerCase().split(/\s+/)
-  const queryVec = buildVector(queryTerms, new Map(index.flatMap((cv) =>
-    [...cv.vector.entries()].map(([t, v]) => [t, v])
-  )))
-
-  const scored = index
-    .map((cv) => ({ chunkId: cv.chunkId, score: cosineSimilarity(queryVec, cv.vector) }))
-    .filter((r) => r.score >= 0.05)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK)
-
-  return scored.map((r) => {
-    const chunk = chunkMap.get(r.chunkId)!
-    return {
-      chunkId: r.chunkId,
-      group: chunk.group,
-      score: r.score,
-      question: chunk.question,
-      answer: chunk.answer,
-    }
+  const hits = await store.query({
+    indexName: INDEX_NAME,
+    queryVector: embedding,
+    topK,
+    minScore: 0.5,
   })
+
+  return hits.map((h) => ({
+    chunkId: (h.metadata?.chunkId as string) ?? h.id,
+    group: (h.metadata?.group as string) ?? 'unknown',
+    score: h.score,
+    question: (h.metadata?.question as string) ?? '',
+    answer: (h.metadata?.answer as string) ?? '',
+  }))
 }

@@ -8,24 +8,32 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "format": "prettier --write src"
+    "format": "prettier --write src",
+    "eval": "vitest run",
+    "eval:watch": "vitest"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.74",
     "@mastra/libsql": "^1.10.1",
     "@mastra/memory": "^1.18.0",
+    "@mastra/pg": "^1.11.0",
+    "@types/pg": "^8.20.0",
+    "ai": "^6.0.184",
     "dotenv": "^16.4.7",
     "mastra": "^1.9.1",
+    "pg": "^8.20.0",
     "telegraf": "^4.16.3",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
+    "@mastra/evals": "^1.2.2",
     "@types/node": "^22.0.0",
     "eslint": "^9.0.0",
     "prettier": "^3.4.0",
     "tsx": "^4.21.0",
     "typescript": "^5.8.0",
-    "typescript-eslint": "^8.0.0"
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^4.1.6"
   }
 }

@@ -1,29 +1,84 @@
 import { resetCancellationState } from '../agents/cancellation.js'
+import { getPool } from '../db/client.js'
 import { logger } from '../utils/logger.js'
 
 export interface LongTermMemory {
   userId: number
-  lastInteractionDate: string   // ISO 8601
+  lastInteractionDate: string
   totalInteractions: number
-  offersShown: string[]         // retention offer IDs already presented
+  offersShown: string[]
   previousPlans: string[]
-  resolvedIssues: string[]      // issue types from createTicket calls
+  resolvedIssues: string[]
   satisfactionSignals: ('positive' | 'negative' | 'neutral')[]
-  summary: string               // 1-2 sentence agent-written recap of last session
+  summary: string
 }
 
-const store = new Map<number, LongTermMemory>()
-
-export function getLongTermMemory(userId: number): LongTermMemory | undefined {
-  return store.get(userId)
+interface LongTermMemoryRow {
+  user_id: number
+  last_interaction_date: Date
+  total_interactions: number
+  offers_shown: string[]
+  previous_plans: string[]
+  resolved_issues: string[]
+  satisfaction_signals: ('positive' | 'negative' | 'neutral')[]
+  summary: string
 }
 
-export function setLongTermMemory(userId: number, memory: LongTermMemory): void {
-  store.set(userId, memory)
-}
-
-function emptyMemory(userId: number): LongTermMemory {
+function rowToMemory(row: LongTermMemoryRow): LongTermMemory {
   return {
+    userId: row.user_id,
+    lastInteractionDate: row.last_interaction_date.toISOString(),
+    totalInteractions: row.total_interactions,
+    offersShown: row.offers_shown,
+    previousPlans: row.previous_plans,
+    resolvedIssues: row.resolved_issues,
+    satisfactionSignals: row.satisfaction_signals,
+    summary: row.summary,
+  }
+}
+
+export async function getLongTermMemory(userId: number): Promise<LongTermMemory | undefined> {
+  const { rows } = await getPool().query<LongTermMemoryRow>(
+    `SELECT user_id, last_interaction_date, total_interactions, offers_shown,
+            previous_plans, resolved_issues, satisfaction_signals, summary
+     FROM app.long_term_memory WHERE user_id = $1 LIMIT 1`,
+    [userId],
+  )
+  return rows[0] ? rowToMemory(rows[0]) : undefined
+}
+
+export async function setLongTermMemory(userId: number, memory: LongTermMemory): Promise<void> {
+  await getPool().query(
+    `INSERT INTO app.long_term_memory (
+       user_id, last_interaction_date, total_interactions, offers_shown,
+       previous_plans, resolved_issues, satisfaction_signals, summary
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ON CONFLICT (user_id) DO UPDATE SET
+       last_interaction_date = EXCLUDED.last_interaction_date,
+       total_interactions = EXCLUDED.total_interactions,
+       offers_shown = EXCLUDED.offers_shown,
+       previous_plans = EXCLUDED.previous_plans,
+       resolved_issues = EXCLUDED.resolved_issues,
+       satisfaction_signals = EXCLUDED.satisfaction_signals,
+       summary = EXCLUDED.summary`,
+    [
+      userId,
+      memory.lastInteractionDate,
+      memory.totalInteractions,
+      memory.offersShown,
+      memory.previousPlans,
+      memory.resolvedIssues,
+      memory.satisfactionSignals,
+      memory.summary,
+    ],
+  )
+}
+
+export async function updateLongTermMemory(
+  userId: number,
+  patch: Partial<LongTermMemory>,
+): Promise<void> {
+  const existing = (await getLongTermMemory(userId)) ?? {
     userId,
     lastInteractionDate: new Date().toISOString(),
     totalInteractions: 0,
@@ -33,22 +88,25 @@ function emptyMemory(userId: number): LongTermMemory {
     satisfactionSignals: [],
     summary: '',
   }
+  await setLongTermMemory(userId, { ...existing, ...patch })
 }
 
-export function updateLongTermMemory(userId: number, patch: Partial<LongTermMemory>): void {
-  const existing = store.get(userId) ?? emptyMemory(userId)
-  store.set(userId, { ...existing, ...patch })
+export async function recordPresentedOffer(userId: number, offerId: string): Promise<void> {
+  await getPool().query(
+    `INSERT INTO app.session_presented_offers (user_id, offer_id)
+     VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+    [userId, offerId],
+  )
 }
 
-// Session-scoped presented-offer cache. Flushed into LongTermMemory.offersShown
-// when endSession runs. Per-spec: offers are recorded as "shown" only at session
-// end, so they survive even if the user disconnects without applying one.
-const sessionPresentedOffers = new Map<number, Set<string>>()
-
-export function recordPresentedOffer(userId: number, offerId: string): void {
-  const set = sessionPresentedOffers.get(userId) ?? new Set<string>()
-  set.add(offerId)
-  sessionPresentedOffers.set(userId, set)
+async function flushPresentedOffers(userId: number): Promise<string[]> {
+  const pool = getPool()
+  const { rows } = await pool.query<{ offer_id: string }>(
+    `SELECT offer_id FROM app.session_presented_offers WHERE user_id = $1`,
+    [userId],
+  )
+  await pool.query(`DELETE FROM app.session_presented_offers WHERE user_id = $1`, [userId])
+  return rows.map((r) => r.offer_id)
 }
 
 export interface SessionEndPayload {
@@ -60,12 +118,23 @@ export interface SessionEndPayload {
   previousPlanId?: string
 }
 
-export function endSession(userId: number, payload: SessionEndPayload = {}): LongTermMemory {
-  const existing = store.get(userId) ?? emptyMemory(userId)
-  const presented = sessionPresentedOffers.get(userId)
-  const offersShown = presented
-    ? Array.from(new Set([...existing.offersShown, ...presented]))
-    : existing.offersShown
+export async function endSession(
+  userId: number,
+  payload: SessionEndPayload = {},
+): Promise<LongTermMemory> {
+  const existing = (await getLongTermMemory(userId)) ?? {
+    userId,
+    lastInteractionDate: new Date().toISOString(),
+    totalInteractions: 0,
+    offersShown: [],
+    previousPlans: [],
+    resolvedIssues: [],
+    satisfactionSignals: [],
+    summary: '',
+  }
+
+  const newlyShown = await flushPresentedOffers(userId)
+  const offersShown = Array.from(new Set([...existing.offersShown, ...newlyShown]))
   const resolvedIssues = payload.resolvedIssueType
     ? [...existing.resolvedIssues, payload.resolvedIssueType]
     : existing.resolvedIssues
@@ -86,9 +155,8 @@ export function endSession(userId: number, payload: SessionEndPayload = {}): Lon
     satisfactionSignals,
     summary: payload.summary ?? existing.summary,
   }
-  store.set(userId, next)
-  sessionPresentedOffers.delete(userId)
-  resetCancellationState(userId)
+  await setLongTermMemory(userId, next)
+  await resetCancellationState(userId)
 
   logger.info({
     event: 'turn.end',

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import {
   getUserById,
   getUserByMobileNumber,
+  updateUser,
   type UserPreferences,
   type UserProfile,
 } from '../data/users.js'
@@ -67,7 +68,7 @@ export const getUserProfileById = createTool({
   execute: async ({ userId }) => {
     const id = toUserId(userId)
     logger.info({ event: 'tool.call', toolName: 'getUserProfileById', userId: id })
-    const user = getUserById(id)
+    const user = await getUserById(id)
     if (!user) return err(`No user found with id ${id}`)
     return ok(toProfileView(user))
   },
@@ -88,7 +89,7 @@ export const getUserProfileByNumber = createTool({
     logger.info({ event: 'tool.call', toolName: 'getUserProfileByNumber', mobileNumber })
     const normalised = normaliseMobileNumber(mobileNumber)
     if (!normalised) return err(`Invalid mobile number: ${mobileNumber}`)
-    const user = getUserByMobileNumber(normalised)
+    const user = await getUserByMobileNumber(normalised)
     if (!user) return err(`No user found for mobile number ${normalised}`)
     return ok(toProfileView(user))
   },
@@ -113,13 +114,13 @@ export const updateUserPreferences = createTool({
       userId: id,
       keys: Object.keys(updates),
     })
-    const user = getUserById(id)
+    const user = await getUserById(id)
     if (!user) return err(`No user found with id ${id}`)
     const defined = Object.fromEntries(
       Object.entries(updates).filter(([, v]) => v !== undefined),
     ) as Partial<UserPreferences>
     const next: UserPreferences = { ...user.preferences, ...defined }
-    user.preferences = next
+    await updateUser(id, { preferences: next })
     return ok(next)
   },
 })
