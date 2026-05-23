@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: mirzo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PGUSER:-mirzo}
+      POSTGRES_PASSWORD: ${PGPASSWORD:-mirzo}
+      POSTGRES_DB: ${PGDATABASE:-mirzo}
+    ports:
+      - '${PGPORT:-5432}:5432'
+    volumes:
+      - mirzo-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${PGUSER:-mirzo} -d ${PGDATABASE:-mirzo}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: mirzo-ollama
+    restart: unless-stopped
+    volumes:
+      - mirzo-ollama-data:/root/.ollama
+    ports:
+      - '11434:11434'
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: mirzo-ollama-pull
+    depends_on:
+      - ollama
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      echo 'Waiting for Ollama to start...'
+      until ollama list --host http://ollama:11434 > /dev/null 2>&1; do
+        sleep 2
+      done
+      echo 'Pulling nomic-embed-text model...'
+      ollama pull nomic-embed-text --host http://ollama:11434
+      echo 'Model pulled successfully!'
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mirzo-agent
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    ports:
+      - '4111:4111'
+    env_file:
+      - .env
+    environment:
+      - PGHOST=postgres
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - OLLAMA_HOST=http://ollama:11434
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - MASTRA_HOST=0.0.0.0
+
+volumes:
+  mirzo-pg-data:
+  mirzo-ollama-data:

@@ -1,6 +1,7 @@
 .mastra/
 mastra-memory.db
 mastra-memory.db-*
+.antigravitycli/
 
 # Logs
 logs

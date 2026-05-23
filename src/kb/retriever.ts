@@ -1,16 +1,10 @@
-import { embed, embedMany } from 'ai'
-import { google } from '@ai-sdk/google'
 import { PgVector } from '@mastra/pg'
 import { getPgConfig } from '../db/client.js'
 import { logger } from '../utils/logger.js'
 
 const INDEX_NAME = 'kb_chunks'
-// text-embedding-004 emits 768-dim vectors.
+// nomic-embed-text outputs 768-dim vectors.
 const EMBEDDING_DIMENSION = 768
-
-const embeddingModel = google.textEmbeddingModel(
-  process.env.EMBEDDING_MODEL ?? 'text-embedding-004',
-)
 
 let vectorStore: PgVector | undefined
 
@@ -29,6 +23,32 @@ function chunkText(chunk: { question: string; answer: string; keywordTags: strin
   return [chunk.question, chunk.answer, chunk.keywordTags.join(' ')].join('\n')
 }
 
+async function getLocalEmbeddings(values: string[]): Promise<number[][]> {
+  const host = process.env.OLLAMA_HOST ?? 'http://localhost:11434'
+  const model = process.env.EMBEDDING_MODEL ?? 'nomic-embed-text'
+  const response = await fetch(`${host}/api/embed`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, input: values }),
+  })
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`Ollama API error (${response.status}): ${text || response.statusText}`)
+  }
+  const result = (await response.json()) as { embeddings: number[][] }
+  if (!result.embeddings || !Array.isArray(result.embeddings) || result.embeddings.length !== values.length) {
+    throw new Error('Ollama did not return the expected number of embeddings')
+  }
+  return result.embeddings
+}
+
+async function getLocalEmbedding(value: string): Promise<number[]> {
+  const embeddings = await getLocalEmbeddings([value])
+  const embedding = embeddings[0]
+  if (!embedding) throw new Error('Failed to extract embedding')
+  return embedding
+}
+
 /**
  * Idempotent: creates the pgvector index if missing, then embeds and upserts
  * every chunk. Uses chunkId as the vector id so re-runs replace existing rows.
@@ -44,21 +64,29 @@ export async function buildRetriever(): Promise<void> {
   })
 
   const values = chunks.map(chunkText)
-  const { embeddings } = await embedMany({ model: embeddingModel, values })
+  try {
+    const embeddings = await getLocalEmbeddings(values)
 
-  await store.upsert({
-    indexName: INDEX_NAME,
-    vectors: embeddings,
-    ids: chunks.map((c) => c.chunkId),
-    metadata: chunks.map((c) => ({
-      chunkId: c.chunkId,
-      group: c.group,
-      question: c.question,
-      answer: c.answer,
-    })),
-  })
+    await store.upsert({
+      indexName: INDEX_NAME,
+      vectors: embeddings,
+      ids: chunks.map((c) => c.chunkId),
+      metadata: chunks.map((c) => ({
+        chunkId: c.chunkId,
+        group: c.group,
+        question: c.question,
+        answer: c.answer,
+      })),
+    })
 
-  logger.info({ event: 'kb.retrieve', message: 'indexed', count: chunks.length })
+    logger.info({ event: 'kb.retrieve', message: 'indexed', count: chunks.length })
+  } catch (error) {
+    logger.warn({
+      event: 'kb.retrieve',
+      message: 'Failed to generate or upsert embeddings at startup. Using existing index if present.',
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
 }
 
 export interface SearchResult {
@@ -71,7 +99,7 @@ export interface SearchResult {
 
 export async function searchKB(query: string, topK = 3): Promise<SearchResult[]> {
   const store = getVectorStore()
-  const { embedding } = await embed({ model: embeddingModel, value: query })
+  const embedding = await getLocalEmbedding(query)
 
   const hits = await store.query({
     indexName: INDEX_NAME,
