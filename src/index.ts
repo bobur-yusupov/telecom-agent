@@ -1,8 +1,7 @@
 import 'dotenv/config'
 
-const required = ['GOOGLE_GENERATIVE_AI_API_KEY'] as const
-for (const key of required) {
-  if (!process.env[key]) throw new Error(`Missing required env var: ${key}`)
+if (!process.env.GOOGLE_API_KEY && !process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+  throw new Error('Missing required env var: GOOGLE_API_KEY')
 }
 
 // Boot order: db (schema + seed) → retriever (vector index + embeddings) → bot

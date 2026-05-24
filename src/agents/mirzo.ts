@@ -1,7 +1,7 @@
 import { Agent } from '@mastra/core/agent'
 import { Memory } from '@mastra/memory'
 import { PostgresStore } from '@mastra/pg'
-import { google } from '@ai-sdk/google'
+import { google } from './provider.js'
 import { getPgConfig } from '../db/client.js'
 import {
   getUserProfileById,

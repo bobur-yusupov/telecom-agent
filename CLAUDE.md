@@ -20,7 +20,7 @@ npm run eval         # run scenario + grounding evals (vitest)
 npm run eval:watch   # watch mode
 ```
 
-Postgres needs to be running before anything else — `src/index.ts` boots `initDb()` (creates schemas, runs migrations, seeds users/plans/addons/outages) and then `buildRetriever()` (creates the pgvector index, embeds + upserts the 23 KB chunks).
+Postgres needs to be running before anything else — `src/index.ts` boots `initDb()` (creates schemas, runs migrations, seeds users/plans/addons/outages) and then `buildRetriever()` (creates the pgvector index, embeds + upserts the 23 KB chunks via local Ollama embeddings).
 
 ## Evals
 
@@ -33,10 +33,14 @@ Free-tier Gemini caps at 15 RPM — the harness paces turns at 4.5s each via `EV
 Copy `.env.example` to `.env` and fill in real values:
 ```
 TELEGRAM_TOKEN=...
-GOOGLE_GENERATIVE_AI_API_KEY=...
+GOOGLE_API_KEY=...
 MODEL_NAME=gemini-3.1-flash-lite
+EMBEDDING_MODEL=nomic-embed-text
+OLLAMA_HOST=http://localhost:11434
 LOG_LEVEL=info
 ```
+
+The chat model uses `GOOGLE_API_KEY` (the name Mastra Studio prompts for); the legacy `GOOGLE_GENERATIVE_AI_API_KEY` is still accepted as a fallback (see `src/agents/provider.ts`). Embeddings run locally via Ollama — `EMBEDDING_MODEL`/`OLLAMA_HOST`.
 
 ## Architecture (single agent, Mastra)
 
@@ -61,6 +65,7 @@ All tools available every turn. No router agent — the model handles intent cla
 | `src/index.ts` | Entry point — validates env, boots retriever, starts bot |
 | `src/bot/telegram.ts` | Telegraf bootstrap, message handler, mutex |
 | `src/agents/mirzo.ts` | Mastra agent definition + system prompt |
+| `src/agents/provider.ts` | Shared Google provider — reads `GOOGLE_API_KEY` (fallback `GOOGLE_GENERATIVE_AI_API_KEY`) |
 | `src/agents/cancellation.ts` | Cancellation FSM (SCEN-04) state transitions |
 | `src/tools/common.ts` | `ToolResult<T>`, `searchKB`, `escalateToHuman` |
 | `src/tools/user.ts` | `getUserProfileById`, `getUserProfileByNumber`, `updateUserPreferences` |
@@ -69,7 +74,7 @@ All tools available every turn. No router agent — the model handles intent cla
 | `src/tools/technical.ts` | `checkOutage`, `runDiagnostic`, `createTicket`, `getTicketStatus` |
 | `src/tools/retention.ts` | `getRetentionOffers`, `applyDiscount` |
 | `src/kb/chunks.ts` | 23 KB chunks (Tajik + Russian, multilingual keywordTags) |
-| `src/kb/retriever.ts` | pgvector index + Google embeddings (text-embedding-004) at startup, cosine similarity at query time |
+| `src/kb/retriever.ts` | pgvector index + local Ollama embeddings (`nomic-embed-text`, 768-dim) at startup, cosine similarity at query time |
 | `src/memory/longTerm.ts` | Long-term memory CRUD (Postgres-backed) + `endSession` writer |
 | `src/db/client.ts` | `pg.Pool` singleton + `getPgConfig()` |
 | `src/db/schema.ts` | DDL for `app.*` tables (users, plans, addons, outages, tickets, escalations, long_term_memory, cancellation_states, session_presented_offers) |

@@ -1,6 +1,6 @@
 import { Mastra } from '@mastra/core/mastra'
 import { PostgresStore } from '@mastra/pg'
-import { google } from '@ai-sdk/google'
+import { google } from '../agents/provider.js'
 import {
   createAnswerRelevancyScorer,
   createFaithfulnessScorer,
