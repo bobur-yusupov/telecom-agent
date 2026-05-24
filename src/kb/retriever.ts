@@ -3,7 +3,6 @@ import { getPgConfig } from '../db/client.js'
 import { logger } from '../utils/logger.js'
 
 const INDEX_NAME = 'kb_chunks'
-// nomic-embed-text outputs 768-dim vectors.
 const EMBEDDING_DIMENSION = 768
 
 let vectorStore: PgVector | undefined
@@ -84,7 +83,7 @@ export async function buildRetriever(): Promise<void> {
     logger.warn({
       event: 'kb.retrieve',
       message: 'Failed to generate or upsert embeddings at startup. Using existing index if present.',
-      error: error instanceof Error ? error.message : String(error),
+      error: { message: error instanceof Error ? error.message : String(error) },
     })
   }
 }

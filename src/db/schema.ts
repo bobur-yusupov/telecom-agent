@@ -91,4 +91,24 @@ CREATE TABLE IF NOT EXISTS app.session_presented_offers (
   offer_id TEXT NOT NULL,
   PRIMARY KEY (user_id, offer_id)
 );
+
+-- Channel-agnostic identity binding: maps a channel's external user id
+-- (e.g. a Telegram chat id, a web session id) to an internal NovaTel user.
+-- The runtime resolves identity through this table only — it never reads
+-- channel-specific columns like users.telegram_id.
+CREATE TABLE IF NOT EXISTS app.channel_identities (
+  channel TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  user_id INTEGER NOT NULL REFERENCES app.users(id),
+  linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (channel, external_id)
+);
+
+-- Per-conversation onboarding progress (SCEN-00). Keyed by the channel-agnostic
+-- conversationId so the 3-attempt limit survives process restarts.
+CREATE TABLE IF NOT EXISTS app.onboarding_states (
+  conversation_id TEXT PRIMARY KEY,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 `

@@ -1,15 +1,11 @@
-// 23 KB chunks sourced from FAQs.md. Each chunk covers one FAQ entry.
-// question/answer are in Tajik + Russian. English/Uzbek responses are generated
-// at inference time by the model from this content.
-
 export interface KBChunk {
   chunkId: string
   group: string
   type: 'FAQ' | 'KB'
-  question: string  // Tajik / Russian combined
-  answer: string    // Tajik / Russian combined
+  question: string
+  answer: string
   toolTags: string[]
-  keywordTags: string[]  // multilingual — used by TF-IDF retriever
+  keywordTags: string[]
 }
 
 export const chunks: KBChunk[] = [

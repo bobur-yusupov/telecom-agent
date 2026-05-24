@@ -11,6 +11,7 @@ export async function initDb(): Promise<void> {
   await pool.query(SCHEMA_SQL)
 
   await seedUsers()
+  await seedChannelIdentities()
   await seedPlans()
   await seedAddons()
   await seedOutages()
@@ -38,6 +39,19 @@ async function seedUsers(): Promise<void> {
         u.lastInvoiceAmount, u.paymentStatus, u.churnRisk, u.openTickets, u.deviceType,
         JSON.stringify(u.preferences), JSON.stringify(u.interactionHistory),
       ],
+    )
+  }
+}
+
+// Seed the personas' Telegram ids as channel identities so known users are
+// recognised on first contact. Onboarding writes new bindings the same way.
+async function seedChannelIdentities(): Promise<void> {
+  const pool = getPool()
+  for (const u of mockUsers) {
+    await pool.query(
+      `INSERT INTO app.channel_identities (channel, external_id, user_id)
+       VALUES ('telegram', $1, $2) ON CONFLICT DO NOTHING`,
+      [String(u.telegramId), u.id],
     )
   }
 }

@@ -44,27 +44,42 @@ The chat model uses `GOOGLE_API_KEY` (the name Mastra Studio prompts for); the l
 
 ## Architecture (single agent, Mastra)
 
+The agent is **channel-agnostic**. A channel adapter translates its platform
+events into `InboundMessage`/`OutboundMessage` and calls the runtime; nothing in
+the runtime or agent knows about a specific channel. Adding a channel = one
+adapter file, no changes to the agent.
+
 ```
-Channel (Telegram, Mastra Studio, etc.)
-  → SCEN-00 check (known user by ctx.from.id?)
-  → Per-chat mutex
-  → Eager preload: getUserProfileById + searchKB in parallel
-  → Context assembly (system prompt + memory block + KB chunks + history + current message)
+Channel adapter (src/channels/telegram.ts, …)
+  → InboundMessage { conversationId, channel, externalUserId, text, command? }
+  → runtime.handleTurn (src/runtime/runtime.ts)
+      → per-conversation mutex + queue cap (max 3)
+      → /start /end lifecycle, non-text guard
+      → identity: resolveUserId(channel, externalUserId) via app.channel_identities
+          ↳ unknown → SCEN-00 onboarding (deterministic, 3-attempt limit) → bind
+      → eager preload: getUserById + searchKB (+ memory + cancellation state) in parallel
+      → context assembly → injected as a system `context` message
   → Mirzo agent — selects tools and generates response in one pass
   → Tool calls (parallel where independent, sequential where dependent)
   → Plain-text reply (confirmations are natural language; user replies "yes"/"no")
-  → Session-end memory update → channel reply
+  → Session-end memory update → OutboundMessage(s) → channel renders/splits
 ```
 
 All tools available every turn. No router agent — the model handles intent classification in one pass.
+The Mirzo agent is also exposed directly in Mastra Studio for development (bypasses the runtime, so onboarding does not run there).
 
 ## Key Source Files
 
 | File | Purpose |
 |---|---|
-| `src/index.ts` | Entry point — validates env, boots retriever, starts bot |
-| `src/bot/telegram.ts` | Telegraf bootstrap, message handler, mutex |
-| `src/agents/mirzo.ts` | Mastra agent definition + system prompt |
+| `src/index.ts` | Entry point — validates env, boots DB + retriever, starts configured channels |
+| `src/runtime/types.ts` | Channel-agnostic contracts: `InboundMessage`, `OutboundMessage`, `ChannelContext` |
+| `src/runtime/runtime.ts` | `handleTurn` — mutex, queue cap, lifecycle, non-text guard, agent invocation |
+| `src/runtime/identity.ts` | `resolveUserId` / `bindIdentity` over `app.channel_identities` |
+| `src/runtime/onboarding.ts` | Deterministic SCEN-00 (greeting, 3-attempt limit, multilingual prompts) |
+| `src/runtime/context.ts` | Per-turn context preload (profile + KB + memory) → system `context` message |
+| `src/channels/telegram.ts` | Telegram adapter: Telegraf ↔ runtime, typing, message splitting |
+| `src/agents/mirzo.ts` | Mastra agent definition + system prompt (channel-agnostic) |
 | `src/agents/provider.ts` | Shared Google provider — reads `GOOGLE_API_KEY` (fallback `GOOGLE_GENERATIVE_AI_API_KEY`) |
 | `src/agents/cancellation.ts` | Cancellation FSM (SCEN-04) state transitions |
 | `src/tools/common.ts` | `ToolResult<T>`, `searchKB`, `escalateToHuman` |
@@ -77,8 +92,8 @@ All tools available every turn. No router agent — the model handles intent cla
 | `src/kb/retriever.ts` | pgvector index + local Ollama embeddings (`nomic-embed-text`, 768-dim) at startup, cosine similarity at query time |
 | `src/memory/longTerm.ts` | Long-term memory CRUD (Postgres-backed) + `endSession` writer |
 | `src/db/client.ts` | `pg.Pool` singleton + `getPgConfig()` |
-| `src/db/schema.ts` | DDL for `app.*` tables (users, plans, addons, outages, tickets, escalations, long_term_memory, cancellation_states, session_presented_offers) |
-| `src/db/init.ts` | Runs schema + seeds users/plans/addons/outages from `src/data/seeds/` |
+| `src/db/schema.ts` | DDL for `app.*` tables (users, plans, addons, outages, tickets, escalations, long_term_memory, cancellation_states, session_presented_offers, channel_identities, onboarding_states) |
+| `src/db/init.ts` | Runs schema + seeds users/plans/addons/outages + Telegram channel_identities from `src/data/seeds/` |
 | `src/data/users.ts` | Async DB-backed user repository (`getUserById`, `updateUser`, etc.) |
 | `src/data/plans.ts` | Async DB-backed plan + addon repository |
 | `src/data/outages.ts` | Async DB-backed outage repository |

@@ -25,8 +25,6 @@ export function getPool(): Pool {
   if (!pool) {
     pool = new Pool({ ...getPgConfig(), max: 10 })
     pool.on('error', (err) => {
-      // Connection errors on idle clients shouldn't crash the process.
-      // eslint-disable-next-line no-console
       console.error('[pg] idle client error', err)
     })
   }
