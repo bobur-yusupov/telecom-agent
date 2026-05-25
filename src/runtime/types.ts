@@ -25,10 +25,14 @@ export interface OutboundMessage {
 }
 
 /**
- * Optional capabilities a channel may expose to the runtime. Every field is
- * optional; the runtime degrades gracefully when a channel can't provide it.
+ * How a channel receives replies and exposes optional capabilities. The runtime
+ * pushes replies through {@link ChannelContext.send} rather than returning them,
+ * because a turn's reply can arrive later than the message that triggered it
+ * (e.g. after rapid partial messages are coalesced into one turn).
  */
 export interface ChannelContext {
+  /** Deliver one or more replies to the user. Called once per processed turn. */
+  send: (messages: OutboundMessage[]) => Promise<void>
   /** Show a "typing"/working indicator, if the channel supports one. */
   sendTyping?: () => Promise<void>
 }

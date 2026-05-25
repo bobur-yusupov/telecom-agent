@@ -9,11 +9,31 @@ import {
   startOnboarding,
 } from '../src/runtime/onboarding.js'
 import { normaliseMobileNumber } from '../src/utils/phone.js'
-import type { InboundMessage } from '../src/runtime/types.js'
+import { purchaseAddon } from '../src/tools/plans.js'
+import { getUserById, updateUser } from '../src/data/users.js'
+import type { ChannelContext, InboundMessage, OutboundMessage } from '../src/runtime/types.js'
+
+type ToolResult<T> = { success: true; data: T } | { success: false; error: string }
+const runTool = <T>(tool: { execute?: unknown }, input: unknown): Promise<ToolResult<T>> =>
+  (tool.execute as (i: unknown) => Promise<ToolResult<T>>)(input)
 
 // All test rows are namespaced so cleanup never touches seeded data.
 const CHANNEL = 'test'
 const PERSONA2_NUMBER = '902222222' // seeds/users.ts → user id 2 (Tajik)
+
+// Fast debounce so tests don't wait the production 2.5s window.
+process.env.TURN_DEBOUNCE_MS = '40'
+
+/** A channel stub that records everything the runtime sends. */
+function capture(): { ctx: ChannelContext; sent: OutboundMessage[] } {
+  const sent: OutboundMessage[] = []
+  return {
+    sent,
+    ctx: { send: async (messages) => void sent.push(...messages) },
+  }
+}
+
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function cleanup(): Promise<void> {
   const pool = getPool()
@@ -46,9 +66,12 @@ describe('phone normalisation', () => {
 
 describe('onboarding (SCEN-00)', () => {
   it('greets an unknown user on first contact', async () => {
+    const { ctx, sent } = capture()
     const msg = inbound({ conversationId: 'test:greet', externalUserId: 'test-greet', text: 'hi' })
-    const [reply] = await handleTurn(msg)
-    expect(reply.text).toBe(GREETING)
+    await handleTurn(msg, ctx)
+    await delay(120) // first text is buffered too, so wait for the debounce flush
+    expect(sent).toHaveLength(1)
+    expect(sent[0]!.text).toBe(GREETING)
     expect(await isOnboarding(msg.conversationId)).toBe(true)
   })
 
@@ -73,21 +96,74 @@ describe('onboarding (SCEN-00)', () => {
   })
 })
 
+describe('purchaseAddon (add data to user)', () => {
+  const USER = 1 // persona #1 — finite plan (50 GB), positive balance
+
+  it('credits data, charges balance, and tolerates a paraphrased addon id', async () => {
+    const before = await getUserById(USER)
+    if (!before) throw new Error('seed user 3 missing')
+    try {
+      const result = await runTool<{
+        addonId: string
+        addedGB: number
+        chargedSomoni: number
+        newDataLimitGB: number
+        newBalanceSomoni: number
+      }>(purchaseAddon, { userId: USER, addonId: '3gb_pack' }) // intentionally non-canonical
+
+      expect(result.success).toBe(true)
+      if (!result.success) return
+      expect(result.data.addonId).toBe('data_3gb') // resolved to the real id
+      expect(result.data.addedGB).toBe(3)
+      expect(result.data.chargedSomoni).toBe(20)
+      expect(result.data.newDataLimitGB).toBe(before.dataLimitGB + 3)
+      expect(result.data.newBalanceSomoni).toBeCloseTo(before.balance - 20, 2)
+
+      const after = await getUserById(USER)
+      expect(after?.dataLimitGB).toBe(before.dataLimitGB + 3)
+      expect(after?.balance).toBeCloseTo(before.balance - 20, 2)
+    } finally {
+      await updateUser(USER, { dataLimitGB: before.dataLimitGB, balance: before.balance })
+    }
+  })
+
+  it('refuses the purchase when the balance is too low', async () => {
+    const before = await getUserById(USER)
+    if (!before) throw new Error('seed user 3 missing')
+    try {
+      await updateUser(USER, { balance: 1 })
+      const result = await runTool(purchaseAddon, { userId: USER, addonId: 'data_3gb' })
+      expect(result.success).toBe(false)
+      if (!result.success) expect(result.error).toMatch(/insufficient/i)
+      const after = await getUserById(USER)
+      expect(after?.dataLimitGB).toBe(before.dataLimitGB) // unchanged on failure
+    } finally {
+      await updateUser(USER, { dataLimitGB: before.dataLimitGB, balance: before.balance })
+    }
+  })
+})
+
 describe('runtime lifecycle', () => {
-  it('rejects non-text content without advancing state', async () => {
+  it('rejects non-text content immediately without advancing state', async () => {
+    const { ctx, sent } = capture()
     const msg = inbound({ conversationId: 'test:nontext', externalUserId: 'test-nontext', text: null })
-    const [reply] = await handleTurn(msg)
-    expect(reply.text).toMatch(/only read text/i)
+    await handleTurn(msg, ctx)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]!.text).toMatch(/only read text/i)
     expect(await isOnboarding(msg.conversationId)).toBe(false) // no onboarding started
   })
 
-  it('enforces the per-conversation queue cap (max 3 in flight)', async () => {
-    // Prologue of handleTurn (count check + increment) runs synchronously, so
-    // five concurrent calls deterministically yield two "busy" rejections.
-    const fire = () =>
-      handleTurn(inbound({ conversationId: 'test:queue', externalUserId: 'test-queue', text: 'hi' }))
-    const results = await Promise.all([fire(), fire(), fire(), fire(), fire()])
-    const busy = results.filter(([r]) => /still working/i.test(r.text))
-    expect(busy.length).toBe(2)
+  it('coalesces rapid partial messages into one reply', async () => {
+    const { ctx, sent } = capture()
+    const frag = (text: string) =>
+      inbound({ conversationId: 'test:coalesce', externalUserId: 'test-coalesce', text })
+    // Two fragments of one thought arrive faster than the debounce window.
+    await handleTurn(frag('manga 1Gb'), ctx)
+    await handleTurn(frag('narxi'), ctx)
+    await delay(120) // let the debounce window elapse and the turn flush
+
+    // Unknown user → exactly one greeting for the whole burst, not one per fragment.
+    expect(sent).toHaveLength(1)
+    expect(sent[0]!.text).toBe(GREETING)
   })
 })

@@ -147,6 +147,7 @@ export const purchaseAddon = createTool({
       addedGB: z.number(),
       chargedSomoni: z.number(),
       newDataLimitGB: z.number(),
+      newBalanceSomoni: z.number(),
     }),
   ),
   execute: async ({ userId, addonId }) => {
@@ -154,18 +155,43 @@ export const purchaseAddon = createTool({
     logger.info({ event: 'tool.call', toolName: 'purchaseAddon', userId: id, addonId })
     const user = await getUserById(id)
     if (!user) return err(`No user found with id ${id}`)
-    const addon = await getAddonById(addonId)
+    const addon = await resolveAddon(addonId)
     if (!addon) return err(`Unknown addon id: ${addonId}`)
     if (user.dataLimitGB === -1) {
       return err('User is on an unlimited plan; data add-ons are not applicable.')
     }
+    if (user.balance < addon.priceSomoni) {
+      return err(
+        `Insufficient balance: ${user.balance} TJS available, add-on costs ${addon.priceSomoni} TJS.`,
+      )
+    }
     const newDataLimitGB = user.dataLimitGB + addon.dataGB
-    await updateUser(id, { dataLimitGB: newDataLimitGB })
+    const newBalanceSomoni = round2(user.balance - addon.priceSomoni)
+    await updateUser(id, { dataLimitGB: newDataLimitGB, balance: newBalanceSomoni })
     return ok({
       addonId: addon.id,
       addedGB: addon.dataGB,
       chargedSomoni: addon.priceSomoni,
       newDataLimitGB,
+      newBalanceSomoni,
     })
   },
 })
+
+/** Avoid floating-point dust on Somoni balances (e.g. 55 - 20 → 35, not 34.99…). */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
+/**
+ * Resolve an add-on by id, tolerating paraphrased ids the model sometimes emits
+ * (e.g. "3gb_pack", "3 GB"). Falls back to matching by the GB number.
+ */
+async function resolveAddon(raw: string) {
+  const exact = await getAddonById(raw)
+  if (exact) return exact
+  const match = raw.match(/(\d+)\s*gb/i) ?? raw.match(/(\d+)/)
+  if (!match) return undefined
+  const gb = parseInt(match[1]!, 10)
+  return (await listAddons()).find((a) => a.dataGB === gb)
+}

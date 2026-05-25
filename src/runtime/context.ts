@@ -36,6 +36,7 @@ export async function buildContextMessages(
     sections.push(
       [
         '[Profile]',
+        `User ID: ${p.id} — pass this exact value as userId to every tool call.`,
         `Name: ${p.name} | Region: ${p.region} | Language: ${p.language}`,
         `Plan: ${p.plan} (${p.dataLimitGB} GB, ${p.dataUsedGB} GB used) | Monthly fee: ${p.monthlyFee} TJS`,
         `Balance: ${p.balance} TJS${low} | Payment: ${p.paymentStatus} | Churn risk: ${p.churnRisk}`,

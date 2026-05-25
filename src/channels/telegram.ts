@@ -1,7 +1,7 @@
 import { Telegraf, type Context } from 'telegraf'
 import { message } from 'telegraf/filters'
 import { handleTurn } from '../runtime/runtime.js'
-import type { InboundMessage } from '../runtime/types.js'
+import type { ChannelContext, InboundMessage } from '../runtime/types.js'
 import { logger } from '../utils/logger.js'
 
 /**
@@ -47,28 +47,35 @@ async function dispatch(
 ): Promise<void> {
   if (!ctx.chat || !ctx.from) return
 
+  const chatId = ctx.chat.id
   const inbound: InboundMessage = {
-    conversationId: `${CHANNEL}:${ctx.chat.id}`,
+    conversationId: `${CHANNEL}:${chatId}`,
     channel: CHANNEL,
     externalUserId: String(ctx.from.id),
     text: partial.text,
     ...(partial.command ? { command: partial.command } : {}),
   }
 
-  try {
-    const replies = await handleTurn(inbound, {
-      sendTyping: async () => {
-        await ctx.sendChatAction('typing')
-      },
-    })
-    for (const reply of replies) {
-      for (const part of splitMessage(reply.text)) {
-        await ctx.reply(part)
+  // Use ctx.telegram (not ctx.reply) so replies still send after this handler
+  // returns — the runtime may defer them while it coalesces partial messages.
+  const channelCtx: ChannelContext = {
+    send: async (messages) => {
+      for (const m of messages) {
+        for (const part of splitMessage(m.text)) {
+          await ctx.telegram.sendMessage(chatId, part)
+        }
       }
-    }
+    },
+    sendTyping: async () => {
+      await ctx.telegram.sendChatAction(chatId, 'typing')
+    },
+  }
+
+  try {
+    await handleTurn(inbound, channelCtx)
   } catch (err) {
     logger.error({ event: 'turn.end', error: toErr(err) })
-    await ctx.reply(TIMEOUT_REPLY).catch(() => {})
+    await ctx.telegram.sendMessage(chatId, TIMEOUT_REPLY).catch(() => {})
   }
 }
 

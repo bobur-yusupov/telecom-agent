@@ -20,10 +20,19 @@ import type { ChannelContext, InboundMessage, OutboundMessage } from './types.js
  */
 
 const NON_TEXT_REPLY = 'I can only read text messages right now.'
-const BUSY_REPLY = 'One moment please — I am still working on your previous message.'
-const MAX_QUEUE = 3
+const ERROR_REPLY = "I'm having trouble right now, please try again in a moment."
 
 type Lang = UserProfile['language']
+
+/**
+ * Quiet window after the last message before a turn is processed. Tuned wider
+ * than a single LLM turn is fast: people type one thought as several quick
+ * phrases, and a turn takes ~10s, so a too-short window splits one question
+ * into multiple redundant turns.
+ */
+function debounceMs(): number {
+  return parseInt(process.env.TURN_DEBOUNCE_MS ?? '4000', 10)
+}
 
 const GOODBYE: Record<Lang, string> = {
   tj: 'Ташаккур, ки ба NovaTel муроҷиат кардед. Рӯзи хуш!',
@@ -32,10 +41,9 @@ const GOODBYE: Record<Lang, string> = {
   en: 'Thanks for contacting NovaTel. Have a great day!',
 }
 
-// Per-conversation serialization: chain turns so two messages in the same
-// conversation never interleave. `pending` enforces a small queue cap.
+// Per-conversation serialization: chain turns so two turns in the same
+// conversation never interleave.
 const chains = new Map<string, Promise<unknown>>()
-const pending = new Map<string, number>()
 
 function runExclusive<T>(key: string, task: () => Promise<T>): Promise<T> {
   const prev = chains.get(key) ?? Promise.resolve()
@@ -51,21 +59,75 @@ function runExclusive<T>(key: string, task: () => Promise<T>): Promise<T> {
   return result
 }
 
-export async function handleTurn(
-  msg: InboundMessage,
-  ctx: ChannelContext = {},
-): Promise<OutboundMessage[]> {
-  const queued = pending.get(msg.conversationId) ?? 0
-  if (queued >= MAX_QUEUE) {
-    return [{ text: BUSY_REPLY }]
+// Debounce buffer: consecutive text messages from one conversation are collected
+// and processed as a single turn once the user pauses, so partial/fragmented
+// messages get one coherent reply instead of one reply per fragment.
+interface Buffer {
+  texts: string[]
+  timer: ReturnType<typeof setTimeout>
+  ctx: ChannelContext
+  base: InboundMessage
+}
+const buffers = new Map<string, Buffer>()
+
+/**
+ * Entry point for a channel. Text messages are buffered and coalesced; commands
+ * (`/start`, `/end`) and non-text content are handled immediately (after
+ * flushing any buffered text first). Replies are pushed via `ctx.send`.
+ */
+export async function handleTurn(msg: InboundMessage, ctx: ChannelContext): Promise<void> {
+  if (msg.command || msg.text === null) {
+    await flushBuffer(msg.conversationId)
+    await deliver(msg.conversationId, ctx, () => processTurn(msg, ctx))
+    return
   }
-  pending.set(msg.conversationId, queued + 1)
+
+  // Immediate "typing" feedback while we wait for more fragments — signals the
+  // message landed, so the user waits instead of re-sending and splitting turns.
+  void ctx.sendTyping?.().catch(() => {})
+
+  const existing = buffers.get(msg.conversationId)
+  if (existing) {
+    existing.texts.push(msg.text)
+    existing.ctx = ctx
+    clearTimeout(existing.timer)
+    existing.timer = setTimeout(() => void flushBuffer(msg.conversationId), debounceMs())
+    return
+  }
+  buffers.set(msg.conversationId, {
+    texts: [msg.text],
+    ctx,
+    base: msg,
+    timer: setTimeout(() => void flushBuffer(msg.conversationId), debounceMs()),
+  })
+}
+
+/** Process whatever text is buffered for a conversation as one combined turn. */
+async function flushBuffer(conversationId: string): Promise<void> {
+  const buf = buffers.get(conversationId)
+  if (!buf) return
+  clearTimeout(buf.timer)
+  buffers.delete(conversationId)
+  const merged: InboundMessage = { ...buf.base, text: buf.texts.join('\n') }
+  await deliver(conversationId, buf.ctx, () => processTurn(merged, buf.ctx))
+}
+
+/** Run a turn under the per-conversation mutex and push its reply via the channel. */
+async function deliver(
+  conversationId: string,
+  ctx: ChannelContext,
+  task: () => Promise<OutboundMessage[]>,
+): Promise<void> {
   try {
-    return await runExclusive(msg.conversationId, () => processTurn(msg, ctx))
-  } finally {
-    const remaining = (pending.get(msg.conversationId) ?? 1) - 1
-    if (remaining <= 0) pending.delete(msg.conversationId)
-    else pending.set(msg.conversationId, remaining)
+    const out = await runExclusive(conversationId, task)
+    if (out.length) await ctx.send(out)
+  } catch (err) {
+    logger.error({
+      event: 'turn.end',
+      conversationId,
+      error: { message: err instanceof Error ? err.message : String(err) },
+    })
+    await ctx.send([{ text: ERROR_REPLY }]).catch(() => {})
   }
 }
 
