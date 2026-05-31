@@ -1,11 +1,5 @@
 import { getPool } from '../db/client.js'
 
-/**
- * Resolve a channel's external user id to an internal NovaTel user id, or `null`
- * if no binding exists yet (→ onboarding). The runtime never reads
- * channel-specific columns like `users.telegram_id`; `app.channel_identities` is
- * the single source of truth for every channel.
- */
 export async function resolveUserId(
   channel: string,
   externalUserId: string,

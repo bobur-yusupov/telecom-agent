@@ -82,10 +82,6 @@ export async function handleTurn(msg: InboundMessage, ctx: ChannelContext): Prom
     return
   }
 
-  // Immediate "typing" feedback while we wait for more fragments — signals the
-  // message landed, so the user waits instead of re-sending and splitting turns.
-  void ctx.sendTyping?.().catch(() => {})
-
   const existing = buffers.get(msg.conversationId)
   if (existing) {
     existing.texts.push(msg.text)
@@ -109,7 +105,19 @@ async function flushBuffer(conversationId: string): Promise<void> {
   clearTimeout(buf.timer)
   buffers.delete(conversationId)
   const merged: InboundMessage = { ...buf.base, text: buf.texts.join('\n') }
-  await deliver(conversationId, buf.ctx, () => processTurn(merged, buf.ctx))
+  const stopTyping = startTypingLoop(buf.ctx)
+  try {
+    await deliver(conversationId, buf.ctx, () => processTurn(merged, buf.ctx))
+  } finally {
+    stopTyping()
+  }
+}
+
+/** Send typing action immediately, then repeat every 4 s until the returned stop fn is called. */
+function startTypingLoop(ctx: ChannelContext): () => void {
+  void ctx.sendTyping?.().catch(() => {})
+  const id = setInterval(() => void ctx.sendTyping?.().catch(() => {}), 4000)
+  return () => clearInterval(id)
 }
 
 /** Run a turn under the per-conversation mutex and push its reply via the channel. */
@@ -195,7 +203,6 @@ async function runAgent(
   msg: InboundMessage,
   ctx: ChannelContext,
 ): Promise<string> {
-  await ctx.sendTyping?.()
   const context = await buildContextMessages(userId, msg.text!)
   const result = await mirzo.generate(msg.text!, {
     memory: { thread: msg.conversationId, resource: String(userId) },

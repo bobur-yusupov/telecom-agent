@@ -1,50 +1,44 @@
-import { Agent } from '@mastra/core/agent'
-import { Memory } from '@mastra/memory'
-import { PostgresStore } from '@mastra/pg'
-import { google } from './provider.js'
-import { getPgConfig } from '../db/client.js'
-import {
-  getUserProfileById,
-  getUserProfileByNumber,
-  updateUserPreferences,
-} from '../tools/user.js'
-import {
-  changePlan,
-  comparePlans,
-  getDataAddons,
-  listPlans,
-  purchaseAddon,
-} from '../tools/plans.js'
-import {
-  checkOutage,
-  createTicket,
-  getTicketStatus,
-  runDiagnostic,
-} from '../tools/technical.js'
-import {
-  applyCredit,
-  getBalance,
-  getInvoice,
-  getPaymentMethods,
-} from '../tools/billing.js'
-import { applyDiscount, getRetentionOffers } from '../tools/retention.js'
-import { escalateToHuman, searchKB } from '../tools/common.js'
+For writing clean prompt we need to come from first principles. We need to understand how LLM work. Attention mechanism is the core of any LLM. LLM does not process the prompt from top to bottom. It looks at the whole prompt and finds the most relevant pieces of information to generate the next token.
 
-const memory = new Memory({
-  storage: new PostgresStore({
-    id: 'mirzo-memory',
-    schemaName: 'memory',
-    ...getPgConfig(),
-  }),
-  options: {
-    lastMessages: 8,
-  },
-})
+What a system prompt actually need to do?
+1. Who am I? - identity and purpose
+2. What are my constraints? - what I can and cannot do
+3. How do I operate? - tools, tone, flows
 
-const instructions = `
+That's the natural hierarchy. Most prompts mix all three together, which dilutes each one.
+
+The Algorithm: structure for attention
+Position 1: H**ard constraints (primacy slot)** Non-negotiable rules. Short, declarative, no softening language. This is what the model must never violate. Scope lives here.
+Position 2: **Identity** Who Mirzo is. This anchors everything that follows.
+Position 3: **Operating procedures** Tools, flows, grounding rules. The "how." This is long and detailed — it belongs in the middle where it won't compete with constraints for attention.
+Position 4: **Tone and style (recency slot)** How to sound. Putting this last means it's fresh at generation time, which is exactly when tone matters — right before the model produces output.
+
+[CONSTRAINTS]        ← primacy, hard rules, scope, never-do
+[IDENTITY]           ← who Mirzo is, one short paragraph  
+[OPERATING RULES]    ← tools, grounding, cancellation flow, confirmations
+[TONE]               ← last, recency slot, how to sound human
+
+Operating rules structure
+
+[Grounding]        — where facts come from
+[Tool usage]       — when to call what, what to do on failure  
+[Cancellation]     — the 5-step flow
+[Confirmations]    — when confirmation is required
+[User identity]    — how to identify the customer
+[Language]         — which language to respond in
+
+
+Engineers collect enormous amounts of data to train LLMs: books, emails, letters, articles... Each content one thing in common: beginning sets the frame for everything follows.
+
+PRIMACY - Language model pays stronger attention to tokens that appear early in the context window.
+
+---
+
+PROMPT
+
 Scope: Only **NovaTel** topics - plans, billing, account, technical issues, payments, SIM, add-ons.
 
-Out of scope: Everything else — math, coding, general knowledge, current events, other companies, any question involving a celebrity or public figure even if framed around NovaTel. If a message mixes off-topic content with a real NovaTel question, ignore the off-topic part entirely and answer only the NovaTel question.
+Out of scope: Everything else — math, coding, general knowledge, current events, other companies, any question involving a celebrity or public figure even if framed around NovaTel.
 
 Rule: When out of scope, decline immediately in the user's language. One sentence. Do not answer, correct, or engage with the question in any way. Then invite them back.
 
@@ -85,35 +79,4 @@ Never call changePlan, purchaseAddon, applyCredit, applyDiscount, or updateUserP
 - When someone is weighing a plan change, give an honest take based on their actual usage — not a sales pitch. If upgrading isn't worth it for them, say so.
 
 # Help them decide (don't just sell)
-When someone is weighing a plan change or add-on, give an honest take based on their actual usage — not a price list. If they've barely used their data, tell them upgrading isn't worth it. Recommend what's genuinely best, even if it's the cheaper option or no change.`.trim()
-
-export const mirzo = new Agent({
-  id: 'mirzo',
-  name: 'Mirzo',
-  description: 'Customer support assistant for NovaTel, a mobile operator in Tajikistan.',
-  instructions,
-  model: google(process.env.MODEL_NAME ?? 'gemini-3.1-flash-lite'),
-  tools: {
-    getUserProfileById,
-    getUserProfileByNumber,
-    updateUserPreferences,
-    listPlans,
-    comparePlans,
-    changePlan,
-    getDataAddons,
-    purchaseAddon,
-    checkOutage,
-    runDiagnostic,
-    createTicket,
-    getTicketStatus,
-    getBalance,
-    getInvoice,
-    applyCredit,
-    getPaymentMethods,
-    getRetentionOffers,
-    applyDiscount,
-    searchKB,
-    escalateToHuman,
-  },
-  memory,
-})
+When someone is weighing a plan change or add-on, give an honest take based on their actual usage — not a price list. If they've barely used their data, tell them upgrading isn't worth it. Recommend what's genuinely best, even if it's the cheaper option or no change.
