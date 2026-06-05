@@ -4,6 +4,23 @@ Gap analysis against `spec/`, `spec/ARCHITECTURE.md`, `spec/IMPLEMENTATION.md`, 
 
 ---
 
+## Done — Eval infrastructure & tooling
+
+Harness work so scenario/grounding evals run deterministically, plus a reusable
+dataset for Mastra Studio experiments and headless scoring.
+
+- [x] **Ephemeral in-RAM test DB** — `docker-compose.test.yml` (tmpfs Postgres on port 5433, project `mirzo-test`), isolated from the main compose project. `tests/setup.ts` truncates + re-seeds fresh each run, so no cross-run drift.
+- [x] **Scripts + npm aliases** — `scripts/start-test-db.sh`, `scripts/eval.sh` (boots ephemeral DB, tears down on exit), `scripts/gen-dataset.sh`, `scripts/reset-db.ts`. npm: `eval:ci`, `gen:dataset`, `db:reset`.
+- [x] **Rate-limit handling** — `runConversation` paces every turn (5s) and retries on 429 (parses `retry in Xs`), so free-tier Gemini bursts don't fail the suite.
+- [x] **Within-run data isolation** — `resetUserState` restores mutable user fields from seed before each test.
+- [x] **Grounding eval fixed** — faithfulness scorer reads `GOOGLE_API_KEY` via the shared provider and is fed actual tool-result payloads as context (was passing call signatures → always scored 0).
+- [x] **Eval dataset generator** — `scripts/gen-dataset.ts` runs curated multilingual conversations through Mirzo → `eval-data/dataset.json` (output scoring) + `eval-data/dataset.studio.json` (Studio agent-experiment items; `input` is a **bare messages array**, `groundTruth` the expected reply).
+- [x] **Headless batch scorer** — `tests/dataset.eval.ts` scores the dataset with faithfulness + answer-relevancy (skips if the dataset file is missing).
+
+**Studio experiment workflow:** `npm run db:reset` → in Studio (localhost:4111) create a dataset, paste each item's `input` array + `groundTruth` → run experiment vs the `mirzo` agent. Reset before each batch so mutating tools (`purchaseAddon`, `changePlan`, `applyDiscount`) don't drift data mid-run. Headless equivalent: `./scripts/eval.sh tests/dataset.eval.ts`.
+
+---
+
 ## P1 — Critical (acceptance criteria broken)
 
 ### 1. ~~Cancellation "never mind" has no reset path~~ ✓
@@ -71,7 +88,7 @@ Schema and seeds define `interactionHistory: InteractionRecord[]` on each user, 
 - [ ] SCEN-03: assert both `checkOutage` and `runDiagnostic` are called (spec: parallel)
 - [ ] SCEN-03 non-happy path: user insists after clean diagnostic → `createTicket` called with category "user-reported, diagnostic clean"
 - [ ] SCEN-04: full FSM sequence — reason given → offer presented → offer declined → alternative → escalated
-- [ ] SCEN-04 non-happy path: user says "never mind" before `ESCALATED` → no escalation, state reset (blocked by task 3)
+- [x] SCEN-04 non-happy path: user says "never mind" before `ESCALATED` → no escalation, state reset (done — see task 1)
 - [ ] SC-02: language switch mid-conversation — send Russian, follow with English, verify reply language changes
 - [ ] SC-08: set `responseLength: 'short'` via `updateUserPreferences`, verify subsequent reply is shorter
 - [ ] SC-11: simulate a tool returning `{ success: false }` → assert polite apology + `escalateToHuman` called
@@ -79,13 +96,10 @@ Schema and seeds define `interactionHistory: InteractionRecord[]` on each user, 
 - [ ] SC-07: policy question (e.g. "how do I pay?") → assert `searchKB` called, no account tool called
 
 ### 10. Grounding eval: wire unused scorers
-**Files:** `tests/grounding.eval.ts`, `src/mastra/index.ts`
+**Files:** `tests/grounding.eval.ts`, `tests/dataset.eval.ts`, `src/mastra/index.ts`
 
-Answer-relevancy and tone scorers are registered in `mastra/index.ts` but never used in any test.
-
-- [ ] Add an answer-relevancy test case to `grounding.eval.ts` for a billing query
-- [ ] Add a tone test case asserting the agent doesn't use formal closing lines ("How else can I help?")
-- [ ] Or remove the unused scorer registrations if the evals won't be written
+- [x] Answer-relevancy now used in `tests/dataset.eval.ts` (runs over every dataset record alongside faithfulness).
+- [ ] **Tone scorer still unused** — its typed signature wants the agent message-array format (`ScorerRunInputForAgent`), not plain `{input, output}` strings, so it was deliberately left out of the batch scorer. Either feed it agent-shaped input or remove it from `src/mastra/index.ts`.
 
 ### 11. `runtime.test.ts` missing unit coverage
 **File:** `tests/runtime.test.ts`
@@ -113,9 +127,9 @@ Spec log schema (`spec/IMPLEMENTATION.md §Logging`) includes `chatId: number` a
 - [ ] Confirm `initDb` does not insert a `channel_identities` row for `telegramId` corresponding to persona #8
 - [ ] Add a comment in `init.ts` explaining why persona #8 is intentionally absent
 
-### 14. Unused scorers in `mastra/index.ts`
+### 14. Unused `tone` scorer in `mastra/index.ts`
 **File:** `src/mastra/index.ts`
 
-`answer-relevancy` and `tone` scorers are registered but no test references them via `mastra`.
+`answer-relevancy` is now exercised by `tests/dataset.eval.ts`. Only `tone` remains unused (see task 10 — it needs agent-shaped input).
 
-- [ ] Either use them in `grounding.eval.ts` (see task 10) or remove from `mastra/index.ts` to reduce dead code
+- [ ] Wire `tone` into a test with agent-shaped input, or remove it from `mastra/index.ts` to reduce dead code
