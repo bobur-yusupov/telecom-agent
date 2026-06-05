@@ -70,10 +70,10 @@ A single linear walkthrough exercising every scenario × language. Use as integr
 
 1. **SCEN-00 (English).** New Telegram account (persona #8). Send `/start` → expect multilingual greeting. Reply with `+992111222333` → expect "not found." Reply with persona #2's number → expect Tajik greeting. Confirm profile linking.
 2. **SCEN-01 (Russian).** As persona #5 (frustrated, overdue). Ask "сколько я должен?" → expect `getInvoice` call, itemised breakdown, mention of overdue status.
-3. **SCEN-02 (English).** As persona #3 (businessman). Ask "what plans do you have?" → expect `listPlans`. Ask "compare Connect and Unlimited Pro" → expect `comparePlans` + inline keyboard.
-4. **SCEN-02 inline keyboard.** Tap "✅ Yes, switch" → expect `changePlan`, confirmation with effective date "first of next month".
+3. **SCEN-02 (English).** As persona #3 (businessman). Ask "what plans do you have?" → expect `listPlans`. Ask "compare Connect and Unlimited Pro" → expect `comparePlans`, agent explains differences and asks for confirmation.
+4. **SCEN-02 confirmation.** Reply "yes, switch me" → expect `changePlan`, confirmation with effective date "first of next month".
 5. **SCEN-03 (Tajik).** As persona #4 (rural). Ask "Интернет кор намекунад" → expect `checkOutage("Kulob")` + `runDiagnostic` in parallel. If outage active → ETA reply. If clean → troubleshooting; if user still complains → `createTicket`.
-6. **SCEN-04 (Russian).** As persona #5. Say "хочу отключить услугу" → verify INIT → REASON_ASKED → OFFER_PRESENTED (with inline keyboard). Tap decline → ALTERNATIVE_PRESENTED. Tap decline → `escalateToHuman`.
+6. **SCEN-04 (Russian).** As persona #5. Say "хочу отключить услугу" → verify INIT → REASON_ASKED → OFFER_PRESENTED. Reply "нет" → ALTERNATIVE_PRESENTED. Reply "нет" → `escalateToHuman`.
 7. **Memory check.** Same process, new conversation as persona #5. Ask any question → expect memory block referencing the prior session summary.
 8. **Language switch.** Send a message in Russian, follow up in English → response language switches immediately.
 9. **Preferences update.** Say "please keep replies short" → expect `updateUserPreferences({ responseLength: 'short' })`, subsequent replies measurably shorter.
@@ -94,5 +94,4 @@ A single linear walkthrough exercising every scenario × language. Use as integr
 | SC-08 | User preferences affect agent behaviour | All | Set `responseLength: 'short'`, verify brevity of responses |
 | SC-09 | Onboarding flow works for unknown users | SCEN-00 | Use a Telegram ID not in mock data, verify number prompt and profile linking |
 | SC-10 | Cancellation state machine runs in correct order | SCEN-04 | Trigger cancellation, verify INIT→REASON→OFFER→ESCALATED sequence |
-| SC-11 | Inline keyboards appear for binary decisions | SCEN-02, 04 | Trigger plan change and retention offer, verify buttons appear |
-| SC-12 | Error handling — no raw errors shown to user | All | Simulate tool failure, verify polite fallback + escalation |
+| SC-11 | Error handling — no raw errors shown to user | All | Simulate tool failure, verify polite fallback + escalation |

@@ -27,7 +27,7 @@ import {
   getInvoice,
   getPaymentMethods,
 } from '../tools/billing.js'
-import { applyDiscount, getRetentionOffers } from '../tools/retention.js'
+import { applyDiscount, getRetentionOffers, resolveCancellation } from '../tools/retention.js'
 import { escalateToHuman, searchKB } from '../tools/common.js'
 
 const memory = new Memory({
@@ -70,7 +70,7 @@ Follow these steps in order — never skip:
 4. If declined -> call comparePlans against a cheaper plan and offer it as an alternative.
 5. If they still decline → call escalateToHuman with reason "cancellation_requested" and share the reference ID.
 
-If the user changes their mind at any point, confirm and end politely — do not push more offers.
+If the user changes their mind at any point (e.g. "never mind", "forget it", "I changed my mind"), call resolveCancellation and end politely — do not push more offers.
 Once escalateToHuman has been called, do not resume the flow — tell the user a human agent will follow up.
 
 # Confirmations
@@ -80,7 +80,7 @@ Never call changePlan, purchaseAddon, applyCredit, applyDiscount, or updateUserP
 - No stock closing lines ("How else can I help?", "Is there anything else?"). Only ask a follow-up when it genuinely moves things forward.
 - Acknowledge emotion before facts. If someone is venting or frustrated, say "Tushunarli" or "Понимаю" first — then help.
 - Match their length. One line in, one line out. A real question gets a real answer.
-- Greet once per conversation. After that, skip "Салом" and get to the point.
+- Greet exactly once per conversation thread. If your previous message in this thread already opened with a greeting (Салом, Привет, Hi, Salom, etc.), do not use any greeting word at the start of your next reply — get straight to the point.
 - No emojis unless the user uses them first.
 - When someone is weighing a plan change, give an honest take based on their actual usage — not a sales pitch. If upgrading isn't worth it for them, say so.
 
@@ -112,6 +112,7 @@ export const mirzo = new Agent({
     getPaymentMethods,
     getRetentionOffers,
     applyDiscount,
+    resolveCancellation,
     searchKB,
     escalateToHuman,
   },

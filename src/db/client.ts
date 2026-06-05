@@ -20,7 +20,6 @@ export function getPgConfig(): PgConnectionConfig {
 
 let pool: Pool | undefined
 
-/** Lazy singleton — the same pool is shared by repositories, migrations, and seeding. */
 export function getPool(): Pool {
   if (!pool) {
     pool = new Pool({ ...getPgConfig(), max: 10 })

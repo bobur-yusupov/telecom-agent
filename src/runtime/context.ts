@@ -4,17 +4,6 @@ import { getCancellationState } from '../agents/cancellation.js'
 import { searchKB, type SearchResult } from '../kb/retriever.js'
 import { logger } from '../utils/logger.js'
 
-/**
- * Eager per-turn context preload (see spec/ARCHITECTURE.md "Context assembly").
- * Profile + KB are fetched in parallel at turn start and injected as a single
- * system message ahead of the user's text, so the agent always has the customer
- * profile and relevant KB chunks without a wasted round-trip.
- *
- * KB retrieval is best-effort: if the embedding service is unavailable the turn
- * still proceeds with profile + memory only.
- */
-
-/** Minimal system-message shape, structurally compatible with the agent's `context` option. */
 export type ContextMessage = { role: 'system'; content: string }
 
 export async function buildContextMessages(

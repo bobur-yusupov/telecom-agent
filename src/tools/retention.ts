@@ -9,6 +9,7 @@ import {
 import {
   getCancellationState,
   isInCancellationFlow,
+  resetCancellationState,
   setCancellationState,
 } from '../agents/cancellation.js'
 import { logger } from '../utils/logger.js'
@@ -207,6 +208,28 @@ export const applyDiscount = createTool({
       newDataLimitGB,
       validUntil: validUntil.toISOString().slice(0, 10),
     })
+  },
+})
+
+export const resolveCancellation = createTool({
+  id: 'resolveCancellation',
+  description:
+    'Call this when the user explicitly withdraws their cancellation intent (e.g. "never mind", "forget it", "I changed my mind") before the flow reaches ESCALATED. Resets the cancellation state and closes the session cleanly as abandoned. Do NOT call if the user was escalated or accepted an offer — those paths end themselves.',
+  inputSchema: z.object({
+    userId: userIdInput,
+  }),
+  outputSchema: toolResultSchema(z.object({ resolved: z.boolean() })),
+  execute: async ({ userId }) => {
+    const id = toUserId(userId)
+    logger.info({ event: 'tool.call', toolName: 'resolveCancellation', userId: id })
+    await resetCancellationState(id)
+    await endSession(id, {
+      scenario: 'retention',
+      resolutionType: 'abandoned',
+      satisfactionSignal: 'neutral',
+      summary: 'User withdrew cancellation intent before escalation.',
+    })
+    return ok({ resolved: true })
   },
 })
 

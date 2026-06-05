@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { google } from '@ai-sdk/google'
+import { google } from '../src/agents/provider.js'
 import { createFaithfulnessScorer } from '@mastra/evals/scorers/prebuilt'
-import { runConversation } from './helpers/runConversation.js'
+import { rateLimitDelay, runConversation } from './helpers/runConversation.js'
 
-// Faithfulness checks the agent's final reply against supporting facts (the
-// raw tool results from this conversation). Score is 0..1; we treat ≥ 0.7
-// as "grounded enough" for the prototype.
+// Faithfulness checks the agent's final reply against the actual tool result
+// payloads from the conversation. Score is 0..1; ≥ 0.7 is "grounded enough".
 const FAITHFULNESS_FLOOR = 0.7
 
 describe('Grounding — LLM-as-judge', () => {
@@ -15,14 +14,19 @@ describe('Grounding — LLM-as-judge', () => {
       { userId: 4 },
     )
 
-    // Use the tool results from the conversation as the ground-truth context.
-    const toolResults = turns
-      .flatMap((t) => t.toolCalls)
-      .map((tc) => `${tc.toolName}(${JSON.stringify(tc.args)})`)
+    // Use the actual tool result payloads as ground-truth context so the
+    // faithfulness judge can verify the agent cited real data (e.g. balance=30),
+    // not invented numbers.
+    const context = turns
+      .flatMap((t) => t.toolResults)
+      .map((tr) => JSON.stringify(tr.result))
+
+    // Pace this scorer call the same as a conversation turn.
+    await rateLimitDelay()
 
     const scorer = createFaithfulnessScorer({
       model: google(process.env.MODEL_NAME ?? 'gemini-3.1-flash-lite'),
-      options: { context: toolResults },
+      options: { context },
     })
 
     const result = await scorer.run({
@@ -30,8 +34,6 @@ describe('Grounding — LLM-as-judge', () => {
       output: finalReply,
     })
 
-    // Surface the judge's reasoning when it fails so you can iterate on the
-    // prompt without re-running the full conversation by hand.
     if (result.score < FAITHFULNESS_FLOOR) {
       console.error('Faithfulness failure', { score: result.score, reason: result.reason, reply: finalReply })
     }

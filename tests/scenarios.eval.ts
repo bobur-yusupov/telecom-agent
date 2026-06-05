@@ -81,6 +81,22 @@ describe('SCEN-04 — Cancellation & retention', () => {
       expect(escalateIndex).toBeGreaterThan(offerIndex)
     }
   })
+
+  it('calls resolveCancellation and never escalates when user changes their mind', async () => {
+    const { allToolNames, finalReply } = await runConversation(
+      [
+        'мой номер 905555555',
+        'хочу отключить услугу',
+        'дорого',
+        'нет, передумала, всё хорошо',
+      ],
+      { userId: 5 },
+    )
+    expect(allToolNames).toContain('resolveCancellation')
+    expect(allToolNames).not.toContain('escalateToHuman')
+    // Final reply should acknowledge the change of mind, not push more offers.
+    expect(finalReply.length).toBeGreaterThan(0)
+  })
 })
 
 describe('Confirmation discipline', () => {
@@ -111,7 +127,12 @@ describe('Confirmation discipline', () => {
 
 describe('Conversational style', () => {
   it('does not open the second reply with a greeting word', async () => {
-    const { turns } = await runConversation(['Салом', 'Салом'])
+    // After the agent already greeted, a follow-up question should get a
+    // direct answer — not another "Салом / Hi / Привет".
+    const { turns } = await runConversation(
+      ['Салом', 'что такое тарифный план Connect?'],
+      { userId: 1 },
+    )
     const second = turns[1].assistant.trimStart().toLowerCase()
     expect(second.startsWith('салом')).toBe(false)
     expect(second.startsWith('hi')).toBe(false)

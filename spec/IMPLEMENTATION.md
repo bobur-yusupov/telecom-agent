@@ -37,12 +37,11 @@ CANCELLATION FLOW (SCEN-04)
   ALTERNATIVE_PRESENTED → accepted → changePlan; declined → escalateToHuman
 - Never skip a step. Never loop back unless the user explicitly restarts.
 
-BINARY DECISIONS
-- For confirmations (plan change, discount, ticket creation, cancellation), end your reply with:
-  [ACTION: confirm_plan_<planId>]
-  [ACTION: accept_offer_<offerId> | decline_offer_<offerId>]
-  [ACTION: create_ticket | skip_ticket]
-- The bot renders these as inline keyboard buttons. Do not include them in the user-visible text.
+CONFIRMATIONS
+- For binary decisions (plan change, discount accept/decline, ticket creation, cancellation),
+  ask in plain language the user can type back. Example: "Shall I switch you to Connect? Reply yes to confirm."
+- Never call a mutating tool until the user replies with an explicit yes/confirm/equivalent in their language
+  in the immediately preceding message.
 
 ERROR HANDLING
 - If a tool returns { success: false }, apologise in the user's language and call escalateToHuman
@@ -50,51 +49,6 @@ ERROR HANDLING
 
 IDENTITY
 - You are Mirzo. Never claim to be ChatGPT, Claude, GPT, or any other system.
-```
-
----
-
-## Inline Keyboards & Callback Re-entry
-
-### Action markers
-
-The agent appends action markers to the end of replies, e.g.:
-```
-[ACTION: confirm_plan_unlimited_pro]
-[ACTION: accept_offer_RET-20PCT-3M | decline_offer_RET-20PCT-3M]
-```
-
-`bot/callbacks.ts` strips these markers from the user-visible text and renders them as inline keyboard buttons.
-
-### Callback handling
-
-When the user taps a button:
-1. Bot receives a `callback_query` with `callback_data` (e.g. `confirm_plan_unlimited_pro`).
-2. `ctx.answerCbQuery()` — dismisses the loading spinner.
-3. Edit the original message to disable buttons (prevents double-taps).
-4. Inject synthetic user message: `"[User selected: confirm_plan_unlimited_pro]"` (English — it's metadata, not user content).
-5. Re-run the agent turn with this synthetic message.
-
-Every turn starts with a user message, whether typed or tapped — the loop is uniform.
-
-### When to emit action markers
-
-Use action markers (never free-text yes/no) for:
-- Plan change confirmation
-- Retention discount accept/decline
-- Ticket creation confirmation
-- Cancellation confirmation
-
-```typescript
-// Example rendered button pair
-ctx.reply('Switch to Unlimited Pro (120 TJS/mo)?', {
-  reply_markup: {
-    inline_keyboard: [[
-      { text: '✅ Yes, switch', callback_data: 'confirm_plan_unlimited_pro' },
-      { text: '❌ No, keep current', callback_data: 'cancel_plan_change' }
-    ]]
-  }
-})
 ```
 
 ---
@@ -160,9 +114,8 @@ Required log events:
 
 ```
 src/
-  bot/
-    telegram.ts        # telegraf bootstrap, message handler, callback_query handler, mutex
-    callbacks.ts       # action marker parser, inline keyboard renderer
+  channels/
+    telegram.ts        # telegraf bootstrap, message handler, typing loop, message splitting
   agents/
     mirzo.ts           # Mastra agent definition + system prompt
     cancellation.ts    # state machine helpers (transitions, state predicates)
