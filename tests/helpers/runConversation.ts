@@ -5,6 +5,7 @@ import { setLongTermMemory } from '../../src/memory/longTerm.js'
 import { updateUser } from '../../src/data/users.js'
 import { users as seedUsers } from '../../src/data/seeds/users.js'
 
+
 export interface ToolCallRecord {
   toolName: string
   args: unknown
