@@ -1,0 +1,191 @@
+[
+  {
+    "input": [
+      {
+        "role": "user",
+        "content": "Салом, рақамам 904444444"
+      },
+      {
+        "role": "assistant",
+        "content": "Салом, Давлат ака. Чӣ тавр метавонам ба шумо кумак кунам?"
+      },
+      {
+        "role": "user",
+        "content": "Ман балансама донистанам даркор"
+      }
+    ],
+    "groundTruth": "Баланси шумо 30 сомони аст.",
+    "metadata": {
+      "id": "billing-balance-tj",
+      "scenario": "billing",
+      "language": "tj",
+      "toolCalls": [
+        "getUserProfileByNumber",
+        "getBalance"
+      ]
+    }
+  },
+  {
+    "input": [
+      {
+        "role": "user",
+        "content": "мой номер 905555555"
+      },
+      {
+        "role": "assistant",
+        "content": "Наталья, здравствуйте. Понимаю ваше недовольство, у вас сейчас отрицательный баланс и есть открытые обращения по качеству интернета. Чем я могу вам помочь?"
+      },
+      {
+        "role": "user",
+        "content": "расскажи про мой последний счёт"
+      }
+    ],
+    "groundTruth": "Ваш последний счет (INV-2026-04-005) за апрель составляет 80 TJS. Это абонентская плата за тариф «Connect». Оплата просрочена, срок был 15 мая.",
+    "metadata": {
+      "id": "billing-invoice-ru",
+      "scenario": "billing",
+      "language": "ru",
+      "toolCalls": [
+        "getUserProfileByNumber",
+        "getInvoice"
+      ]
+    }
+  },
+  {
+    "input": [
+      {
+        "role": "user",
+        "content": "My number is 903333333"
+      },
+      {
+        "role": "assistant",
+        "content": "Salom, James. How can I help you today?"
+      },
+      {
+        "role": "user",
+        "content": "what plans do you offer?"
+      }
+    ],
+    "groundTruth": "We currently have these three plans:\n\n*   **Starter**: 10 GB data, 50 external minutes, unlimited internal calls — 45 TJS/month.\n*   **Connect**: 50 GB data, 100 external minutes, unlimited internal calls — 80 TJS/month.\n*   **Unlimited Pro**: Unlimited data, 100 external minutes, unlimited internal calls — 120 TJS/month.\n\nYou are currently on the Unlimited Pro plan. Given that you've used 60 GB of data this month, the Unlimited Pro plan seems well-suited to your needs. Would you like to compare it with any of the others?",
+    "metadata": {
+      "id": "plans-list-en",
+      "scenario": "plans",
+      "language": "en",
+      "toolCalls": [
+        "getUserProfileByNumber",
+        "listPlans"
+      ]
+    }
+  },
+  {
+    "input": [
+      {
+        "role": "user",
+        "content": "My number is 903333333"
+      },
+      {
+        "role": "assistant",
+        "content": "Salom James. How can I help you with your account today?"
+      },
+      {
+        "role": "user",
+        "content": "compare Connect and Unlimited Pro for me"
+      }
+    ],
+    "groundTruth": "You are currently on the Unlimited Pro plan, which gives you unlimited data for 120 TJS a month.\n\nThe Connect plan costs 80 TJS and provides 50 GB of data. Since you have used 60 GB of data this month, switching to Connect would likely result in you running out of data before the month ends. Given your usage, I would recommend staying on your current plan.",
+    "metadata": {
+      "id": "plans-compare-en",
+      "scenario": "plans",
+      "language": "en",
+      "toolCalls": [
+        "getUserProfileByNumber",
+        "comparePlans"
+      ]
+    }
+  },
+  {
+    "input": [
+      {
+        "role": "user",
+        "content": "Salom, raqamim 906666666"
+      },
+      {
+        "role": "assistant",
+        "content": "Salom, Bobur aka. Qanday yordam bera olaman?"
+      },
+      {
+        "role": "user",
+        "content": "internet ishlamayapti"
+      }
+    ],
+    "groundTruth": "Bokhtar hududida tarmoq bilan bog'liq muammolar yo'q, balans va internetingiz ham yetarli. Telefoningiz sozlamalarini tekshirib ko'rishingizni tavsiya qilaman, agar o'xshamasa, mutaxassisga ulab berishim mumkin.",
+    "metadata": {
+      "id": "technical-no-internet-uz",
+      "scenario": "technical",
+      "language": "uz",
+      "toolCalls": [
+        "runDiagnostic"
+      ]
+    }
+  },
+  {
+    "input": [
+      {
+        "role": "user",
+        "content": "мой номер 901111111"
+      },
+      {
+        "role": "assistant",
+        "content": "Здравствуйте, Алексей! Я вас нашел. Чем я могу вам помочь сегодня?"
+      },
+      {
+        "role": "user",
+        "content": "как можно пополнить баланс?"
+      }
+    ],
+    "groundTruth": "Вы можете пополнить баланс через мобильные приложения Alifmobi, Esxata Mobile или DC Pay, выбрав NovaTel в разделе оплаты услуг. Также доступен USSD-метод: просто наберите *100# на своем телефоне и следуйте инструкциям на экране.",
+    "metadata": {
+      "id": "policy-how-to-pay-ru",
+      "scenario": "policy",
+      "language": "ru",
+      "toolCalls": [
+        "getUserProfileByNumber",
+        "getPaymentMethods"
+      ]
+    }
+  },
+  {
+    "input": [
+      {
+        "role": "user",
+        "content": "мой номер 905555555"
+      },
+      {
+        "role": "assistant",
+        "content": "Наталья, здравствуйте. Вижу ваш профиль. Понимаю, что ситуация с интернетом и счетом неприятная, давайте разберемся. Сейчас проверю состояние сети в Душанбе и запущу диагностику вашего устройства."
+      },
+      {
+        "role": "user",
+        "content": "хочу отключить услугу"
+      },
+      {
+        "role": "assistant",
+        "content": "Наталья, очень жаль это слышать. Подскажите, пожалуйста, что именно вас не устраивает, чтобы я мог попробовать исправить ситуацию?"
+      },
+      {
+        "role": "user",
+        "content": "дорого"
+      }
+    ],
+    "groundTruth": "Понимаю, цены сейчас кусаются. Чтобы вы не уходили, NovaTel готов предложить бонус: 10 ГБ интернета бесплатно на месяц. Это поможет сэкономить 55 сомони. Хотите воспользоваться этим предложением?",
+    "metadata": {
+      "id": "retention-reason-ru",
+      "scenario": "retention",
+      "language": "ru",
+      "toolCalls": [
+        "getUserProfileByNumber",
+        "getRetentionOffers"
+      ]
+    }
+  }
+]

@@ -10,7 +10,10 @@
     "lint": "eslint src",
     "format": "prettier --write src",
     "eval": "vitest run",
-    "eval:watch": "vitest"
+    "eval:watch": "vitest",
+    "eval:ci": "./scripts/eval.sh",
+    "gen:dataset": "./scripts/gen-dataset.sh",
+    "db:reset": "tsx scripts/reset-db.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.74",
