@@ -48,10 +48,6 @@ async function getLocalEmbedding(value: string): Promise<number[]> {
   return embedding
 }
 
-/**
- * Idempotent: creates the pgvector index if missing, then embeds and upserts
- * every chunk. Uses chunkId as the vector id so re-runs replace existing rows.
- */
 export async function buildRetriever(): Promise<void> {
   const { chunks } = await import('./chunks.js')
   const store = getVectorStore()

@@ -61,8 +61,12 @@ export const searchKB = createTool({
     ),
   ),
   execute: async ({ query }) => {
-    logger.info({ event: 'kb.retrieve', query })
     const results = await searchKBImpl(query)
+    logger.info({
+      event: 'kb.retrieve',
+      query,
+      chunks: results.map((r) => ({ chunkId: r.chunkId, score: r.score })),
+    })
     return ok(results)
   },
 })

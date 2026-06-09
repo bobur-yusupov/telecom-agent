@@ -37,17 +37,8 @@ Added `resolveCancellation(userId)` tool — resets FSM state and closes session
 
 Spec (`spec/IMPLEMENTATION.md §Logging`) requires logging query + top-3 chunk IDs + scores on every KB retrieval. Only `{ event: 'kb.retrieve', query }` is logged today.
 
-- [ ] In `safeSearchKB` (`context.ts`), log chunk IDs and scores after a successful retrieval
-- [ ] In the `searchKB` tool execute (`tools/common.ts`), log chunk IDs and scores alongside the query
-
-### 5. KB score threshold too high — valid chunks excluded
-**File:** `src/kb/retriever.ts`
-
-`minScore: 0.5` was set for pgvector cosine similarity with `nomic-embed-text`. The spec says drop chunks with `score < 0.05` (written for TF-IDF). At 0.5 many relevant chunks are likely excluded, especially for Uzbek/English queries.
-
-- [ ] Run 10 representative queries (from `spec/SCENARIOS.md` demo script) and inspect hit scores
-- [ ] Tune `minScore` to the lowest value that still drops clearly irrelevant noise (likely 0.1–0.2)
-- [ ] Add a note in `retriever.ts` explaining the chosen threshold and the embedding model it targets
+- [x] In `safeSearchKB` (`context.ts`), log chunk IDs and scores after a successful retrieval
+- [x] In the `searchKB` tool execute (`tools/common.ts`), log chunk IDs and scores alongside the query
 
 ---
 
@@ -56,7 +47,7 @@ Spec (`spec/IMPLEMENTATION.md §Logging`) requires logging query + top-3 chunk I
 ### 6. System prompt missing context-block instructions
 **File:** `src/agents/mirzo.ts`
 
-`spec/IMPLEMENTATION.md §System Prompt` includes explicit instructions about `[KB]`, `[Memory]`, `[Session]`, and `[Profile]` blocks. Current instructions mention none of these by name, so the agent doesn't know to look for or prioritise them.
+`spec/IMPLEMENTATION.md System Prompt` includes explicit instructions about `[KB]`, `[Memory]`, `[Session]`, and `[Profile]` blocks. Current instructions mention none of these by name, so the agent doesn't know to look for or prioritise them.
 
 - [ ] Add instruction: read `[Profile]` block — User ID in it is the exact value to pass to all tools
 - [ ] Add instruction: read `[Memory]` block before responding; never re-offer discounts in `offersShown`

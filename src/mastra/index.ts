@@ -1,15 +1,14 @@
 import { Mastra } from '@mastra/core/mastra'
 import { PostgresStore } from '@mastra/pg'
-import { google } from '../agents/provider.js'
-import {
-  createAnswerRelevancyScorer,
-  createFaithfulnessScorer,
-  createToneScorer,
-} from '@mastra/evals/scorers/prebuilt'
 import { getPgConfig } from '../db/client.js'
 import { mirzo } from '../agents/mirzo.js'
+import { google } from '../agents/provider.js';
+import { scopeEnforcementScorer } from '../eval/scope-enforcement-scorer.js'
+import {
+  createAnswerRelevancyScorer,
+} from '@mastra/evals/scorers/prebuilt';
 
-const judgeModel = google(process.env.MODEL_NAME ?? 'gemini-3.1-flash-lite')
+const judge = google(process.env.MODEL_NAME ?? 'gemini-3.1-flash-lite')
 
 export const mastra = new Mastra({
   agents: { mirzo },
@@ -19,8 +18,7 @@ export const mastra = new Mastra({
     ...getPgConfig(),
   }),
   scorers: {
-    faithfulness: createFaithfulnessScorer({ model: judgeModel }),
-    'answer-relevancy': createAnswerRelevancyScorer({ model: judgeModel }),
-    tone: createToneScorer(),
+    scopeEnforcementScorer,
+    answerRelevancy: createAnswerRelevancyScorer({ model: judge }),
   },
-})
+});

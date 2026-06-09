@@ -59,7 +59,13 @@ export async function buildContextMessages(
 
 async function safeSearchKB(query: string): Promise<SearchResult[]> {
   try {
-    return await searchKB(query)
+    const results = await searchKB(query)
+    logger.info({
+      event: 'kb.retrieve',
+      query,
+      chunks: results.map((r) => ({ chunkId: r.chunkId, score: r.score })),
+    })
+    return results
   } catch (err) {
     logger.warn({
       event: 'kb.retrieve',
