@@ -18,13 +18,26 @@ npm run lint         # ESLint over src/
 npm run format       # Prettier over src/
 npm run eval         # run scenario + grounding evals (vitest)
 npm run eval:watch   # watch mode
+npm run eval:ci      # full suite against an ephemeral in-RAM Postgres (scripts/eval.sh)
+npm run gen:dataset  # regenerate eval-data/dataset.json (scripts/gen-dataset.sh)
+npm run db:reset     # truncate + re-seed app tables back to baseline (scripts/reset-db.ts)
 ```
 
 Postgres needs to be running before anything else — `src/index.ts` boots `initDb()` (creates schemas, runs migrations, seeds users/plans/addons/outages) and then `buildRetriever()` (creates the pgvector index, embeds + upserts the 23 KB chunks via local Ollama embeddings).
 
 ## Evals
 
-`tests/` runs scripted conversations through the live Mirzo agent and asserts on tool calls + replies. Deterministic checks (which tool got called, in what order, language detection, no-mutation-without-confirmation) live in [tests/scenarios.eval.ts](tests/scenarios.eval.ts). One LLM-as-judge grounding check using `@mastra/evals` lives in [tests/grounding.eval.ts](tests/grounding.eval.ts).
+`tests/` runs scripted conversations through the live Mirzo agent and asserts on tool calls + replies.
+
+| File | Checks |
+|---|---|
+| [tests/scenarios.eval.ts](tests/scenarios.eval.ts) | Deterministic: which tool got called, in what order, language detection, no-mutation-without-confirmation |
+| [tests/grounding.eval.ts](tests/grounding.eval.ts) | One LLM-as-judge grounding check using `@mastra/evals` |
+| [tests/dataset.eval.ts](tests/dataset.eval.ts) | Batch-scores `eval-data/dataset.json` (faithfulness + answer-relevancy). **Skips if the file is missing** — generate it first with `npm run gen:dataset` |
+| [tests/runtime.test.ts](tests/runtime.test.ts) | Unit tests for the runtime (mutex, lifecycle, identity) — no live model calls |
+| [tests/helpers/runConversation.ts](tests/helpers/runConversation.ts) | Shared harness: `runConversation`, `resetUserState`, `rateLimitDelay` |
+
+`npm run gen:dataset` ([scripts/gen-dataset.sh](scripts/gen-dataset.sh)) boots an ephemeral DB and runs curated conversations through Mirzo to produce `eval-data/dataset.json`. `npm run eval:ci` ([scripts/eval.sh](scripts/eval.sh)) runs the full suite against that same ephemeral in-RAM Postgres.
 
 Free-tier Gemini caps at 15 RPM — the harness paces turns at 4.5s each via `EVAL_TURN_DELAY_MS`. Set `EVAL_TURN_DELAY_MS=0` on a paid tier. Full suite takes ~4 min on free tier.
 
@@ -82,6 +95,8 @@ The Mirzo agent is also exposed directly in Mastra Studio for development (bypas
 | `src/agents/mirzo.ts` | Mastra agent definition + system prompt (channel-agnostic) |
 | `src/agents/provider.ts` | Shared Google provider — reads `GOOGLE_API_KEY` (fallback `GOOGLE_GENERATIVE_AI_API_KEY`) |
 | `src/agents/cancellation.ts` | Cancellation FSM (SCEN-04) state transitions |
+| `src/mastra/index.ts` | Mastra instance — registers `mirzo`, `PostgresStore`, and scorers (`scopeEnforcementScorer`, `answerRelevancy`); also exposes the agent in Mastra Studio |
+| `src/eval/scope-enforcement-scorer.ts` | Custom LLM-judge scorer — flags responses that engage with out-of-scope content |
 | `src/tools/common.ts` | `ToolResult<T>`, `searchKB`, `escalateToHuman` |
 | `src/tools/user.ts` | `getUserProfileById`, `getUserProfileByNumber`, `updateUserPreferences` |
 | `src/tools/billing.ts` | `getBalance`, `getInvoice`, `applyCredit`, `getPaymentMethods` |
@@ -98,6 +113,8 @@ The Mirzo agent is also exposed directly in Mastra Studio for development (bypas
 | `src/data/plans.ts` | Async DB-backed plan + addon repository |
 | `src/data/outages.ts` | Async DB-backed outage repository |
 | `src/data/seeds/*.ts` | Mock data arrays — single source of truth for `initDb` seeding |
+| `src/data/dataset.ts` | One-shot helper that uploads the curated eval cases to a Mastra Studio dataset (run manually) |
+| `scripts/gen-dataset.ts` | Runs curated conversations through Mirzo → writes `eval-data/dataset.json` (invoked by `scripts/gen-dataset.sh`) |
 | `src/utils/logger.ts` | Structured JSON logger (`LOG_LEVEL` env) |
 | `src/utils/phone.ts` | `normaliseMobileNumber` — strips +992, leading 0, non-digits |
 
