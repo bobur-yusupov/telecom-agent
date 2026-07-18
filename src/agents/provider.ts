@@ -32,8 +32,9 @@ function resolveModelProvider(): ModelProvider {
 
 export const modelProvider = resolveModelProvider()
 
+export const modelName = process.env.MODEL_NAME ?? DEFAULT_MODEL_NAMES[modelProvider]
+
 function buildChatModel() {
-  const modelName = process.env.MODEL_NAME ?? DEFAULT_MODEL_NAMES[modelProvider]
   switch (modelProvider) {
     case 'gemini':
       return google(modelName)

@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { mirzo } from '../../src/agents/mirzo.js'
-import { resetCancellationState } from '../../src/agents/cancellation.js'
-import { setLongTermMemory } from '../../src/memory/longTerm.js'
-import { updateUser } from '../../src/data/users.js'
-import { users as seedUsers } from '../../src/data/seeds/users.js'
+import { resetUserState } from '../../src/data/resetUserState.js'
+
+export { resetUserState }
 
 
 export interface ToolCallRecord {
@@ -64,33 +63,6 @@ export async function runConversation(
 
   const allToolNames = turns.flatMap((t) => t.toolCalls.map((tc) => tc.toolName))
   return { turns, allToolNames, finalReply: turns[turns.length - 1]?.assistant ?? '' }
-}
-
-/** Reset cross-test state for a user. Run before any test that uses this user. */
-export async function resetUserState(userId: number): Promise<void> {
-  await resetCancellationState(userId)
-  await setLongTermMemory(userId, {
-    userId,
-    lastInteractionDate: new Date().toISOString(),
-    totalInteractions: 0,
-    offersShown: [],
-    previousPlans: [],
-    resolvedIssues: [],
-    satisfactionSignals: [],
-    summary: '',
-  })
-  // Restore mutable user fields to seed values so test mutations (balance
-  // deductions, plan changes, data add-ons) don't bleed between runs.
-  const seed = seedUsers.find((u) => u.id === userId)
-  if (seed) {
-    await updateUser(userId, {
-      balance: seed.balance,
-      dataLimitGB: seed.dataLimitGB,
-      monthlyFee: seed.monthlyFee,
-      paymentStatus: seed.paymentStatus,
-      plan: seed.plan,
-    })
-  }
 }
 
 /** True if the text looks like Tajik/Russian Cyrillic. */
