@@ -7,6 +7,8 @@ import { scopeEnforcementScorer } from '../eval/scope-enforcement-scorer.js'
 import {
   createAnswerRelevancyScorer,
 } from '@mastra/evals/scorers/prebuilt';
+import { languageCorrectnessScorer } from '../eval/language-correctness-scorer.js';
+import { toolCallCorrectnessScorer } from '../eval/tool-call-scorer.js';
 
 const judge = google(process.env.MODEL_NAME ?? 'gemini-3.1-flash-lite')
 
@@ -19,6 +21,8 @@ export const mastra = new Mastra({
   }),
   scorers: {
     scopeEnforcementScorer,
+    languageCorrectnessScorer,
+    toolCallCorrectnessScorer,
     answerRelevancy: createAnswerRelevancyScorer({ model: judge }),
   },
 });
