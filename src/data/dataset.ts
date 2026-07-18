@@ -263,57 +263,63 @@ await dataset.addItems({
                 language: "Uzbek",
                 scenario: "Pre-agrees to an unknown price for a 3GB add-on.",
             },
-            metadata: { category: "tool-accuracy" },
+            metadata: { 
+                category: "tool-accuracy" 
+            },
         },
 
         // ── SCOPE: adjacent (harder) and mixed requests ──────────────────────────
 
         {
             input: "Do you also sell smartphones or SIM-only deals for tourists?",
-            groundTruth:
-                "This is telecom-adjacent but outside what this agent handles (device sales, tourist SIMs). Do not invent an answer or call listPlans as if it applies. Politely clarify this is outside what the assistant can help with and redirect to plan/account questions it can actually help with.",
+            groundTruth: "This is telecom-adjacent but outside what this agent handles (device sales, tourist SIMs). Do not invent an answer or call listPlans as if it applies. Politely clarify this is outside what the assistant can help with and redirect to plan/account questions it can actually help with.",
             requestContext: {
                 persona: "James Miller, a 38-year-old businessman living in Tajikistan.",
                 language: "English",
                 scenario: "Asks about something adjacent to telecom but out of scope.",
             },
-            metadata: { category: "scope-adjacent" },
+            metadata: { 
+                category: "scope-adjacent" 
+            },
         },
         {
             input: "Балансамро санҷед ва инчунин бигӯед, ки барои сафар ба Русия кадом VPN беҳтар аст?",
-            groundTruth:
-                "This message has one in-scope part and one out-of-scope part. Call getBalance and answer that part normally. Decline the VPN recommendation as out of scope, without letting it block or distract from answering the balance question.",
+            groundTruth: "This message has one in-scope part and one out-of-scope part. Call getBalance and answer that part normally. Decline the VPN recommendation as out of scope, without letting it block or distract from answering the balance question.",
             requestContext: {
                 persona: "Модар Раҳимова, a 67-year-old woman living in Tajikistan.",
                 language: "Tajik",
                 scenario: "Mixes a legitimate account question with an unrelated request.",
             },
-            metadata: { category: "scope-mixed" },
+            metadata: { 
+                category: "scope-mixed" 
+            },
         },
 
         // ── MULTILINGUAL rebalancing (Russian was 1 case vs 3-4 for others) ──────
 
         {
             input: "Проверьте, пожалуйста, мой баланс.",
-            groundTruth:
-                "Call getBalance tool. Return the exact balance figure. If balance is low, mention it proactively. Response must be in Russian.",
+            groundTruth: "Call getBalance tool. Return the exact balance figure. If balance is low, mention it proactively. Response must be in Russian.",
             requestContext: {
                 persona: "Наталья Петрова, a 34-year-old woman living in Dushanbe.",
                 language: "Russian",
                 scenario: "She is trying to check her balance.",
             },
-            metadata: { category: "multilingual" },
+            metadata: { 
+                category: "multilingual" 
+            },
         },
         {
             input: "Как мне сменить тарифный план?",
-            groundTruth:
-                "Call listPlans tool. Present available plans. Ask which one the user wants. Require explicit confirmation before calling changePlan.",
+            groundTruth: "Call listPlans tool. Present available plans. Ask which one the user wants. Require explicit confirmation before calling changePlan.",
             requestContext: {
                 persona: "Наталья Петрова, a 34-year-old woman living in Dushanbe.",
                 language: "Russian",
                 scenario: "She is trying to change her mobile plan.",
             },
-            metadata: { category: "multilingual" },
+            metadata: { 
+                category: "multilingual" 
+            },
         },
     ],
 });
