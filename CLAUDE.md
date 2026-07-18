@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Telegram-based customer support AI agent called **Mirzo** for **NovaTel** (fictitious Tajikistan telecom). Handles billing, plan changes, technical support, and cancellation/retention in Uzbek, Tajik, English, and Russian. Single-agent design using Mastra + Google Gemini 3.1 Flash Lite (prototype).
+Telegram-based customer support AI agent called **Mirzo** for **NovaTel** (fictitious Tajikistan telecom). Handles billing, plan changes, technical support, and cancellation/retention in Uzbek, Tajik, English, and Russian. Single-agent design using Mastra, defaulting to Google Gemini 3.1 Flash Lite (prototype) — flaggable to OpenAI or DeepSeek via `MODEL_PROVIDER` for model evaluation (see [Model provider flagging](#model-provider-flagging)).
 
 ## Commands
 
@@ -41,19 +41,30 @@ Postgres needs to be running before anything else — `src/index.ts` boots `init
 
 Free-tier Gemini caps at 15 RPM — the harness paces turns at 4.5s each via `EVAL_TURN_DELAY_MS`. Set `EVAL_TURN_DELAY_MS=0` on a paid tier. Full suite takes ~4 min on free tier.
 
+### Model provider flagging
+
+`MODEL_PROVIDER` (`gemini` | `openai` | `deepseek`, default `gemini`) picks which provider powers **Mirzo itself** — both the live bot and any eval that drives the live agent (`npm run eval`, `npm run gen:dataset`) — via `chatModel` in [src/agents/provider.ts](src/agents/provider.ts). `MODEL_NAME` overrides the model id within that provider; each provider has a sane default if unset. Convenience scripts: `npm run eval:ci:gemini` / `:openai` / `:deepseek` and `npm run gen:dataset:gemini` / `:openai` / `:deepseek`.
+
+The **LLM-judge scorers** (faithfulness, `scopeEnforcementScorer`, `languageCorrectnessScorer`, `toolCallCorrectnessScorer`, `answerRelevancy` in [src/mastra/index.ts](src/mastra/index.ts)) are intentionally pinned to the separate `google` export and never follow `MODEL_PROVIDER` — the judge must stay fixed so scores are comparable across providers under test.
+
+Requires `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` when flagged to those providers. `@ai-sdk/openai` and `@ai-sdk/deepseek` are pinned to their `3.x`/`2.x` majors (not latest) to match the `@ai-sdk/provider` v3 spec that `@ai-sdk/google` and this Mastra version use — bumping either to latest breaks the build with a `LanguageModelV4` type mismatch.
+
 ## Environment Setup
 
 Copy `.env.example` to `.env` and fill in real values:
 ```
 TELEGRAM_TOKEN=...
-GOOGLE_API_KEY=...
+MODEL_PROVIDER=gemini
 MODEL_NAME=gemini-3.1-flash-lite
+GOOGLE_API_KEY=...
+OPENAI_API_KEY=...
+DEEPSEEK_API_KEY=...
 EMBEDDING_MODEL=nomic-embed-text
 OLLAMA_HOST=http://localhost:11434
 LOG_LEVEL=info
 ```
 
-The chat model uses `GOOGLE_API_KEY` (the name Mastra Studio prompts for); the legacy `GOOGLE_GENERATIVE_AI_API_KEY` is still accepted as a fallback (see `src/agents/provider.ts`). Embeddings run locally via Ollama — `EMBEDDING_MODEL`/`OLLAMA_HOST`.
+The Gemini key uses `GOOGLE_API_KEY` (the name Mastra Studio prompts for); the legacy `GOOGLE_GENERATIVE_AI_API_KEY` is still accepted as a fallback. Which provider is actually in use is controlled by `MODEL_PROVIDER` — see [Model provider flagging](#model-provider-flagging) above. Embeddings run locally via Ollama — `EMBEDDING_MODEL`/`OLLAMA_HOST`.
 
 ## Architecture (single agent, Mastra)
 
@@ -93,7 +104,7 @@ The Mirzo agent is also exposed directly in Mastra Studio for development (bypas
 | `src/runtime/context.ts` | Per-turn context preload (profile + KB + memory) → system `context` message |
 | `src/channels/telegram.ts` | Telegram adapter: Telegraf ↔ runtime, typing, message splitting |
 | `src/agents/mirzo.ts` | Mastra agent definition + system prompt (channel-agnostic) |
-| `src/agents/provider.ts` | Shared Google provider — reads `GOOGLE_API_KEY` (fallback `GOOGLE_GENERATIVE_AI_API_KEY`) |
+| `src/agents/provider.ts` | `chatModel` (flagged via `MODEL_PROVIDER`: gemini/openai/deepseek) for Mirzo itself, plus the separate `google` export used as the fixed eval-judge model |
 | `src/agents/cancellation.ts` | Cancellation FSM (SCEN-04) state transitions |
 | `src/mastra/index.ts` | Mastra instance — registers `mirzo`, `PostgresStore`, and scorers (`scopeEnforcementScorer`, `answerRelevancy`); also exposes the agent in Mastra Studio |
 | `src/eval/scope-enforcement-scorer.ts` | Custom LLM-judge scorer — flags responses that engage with out-of-scope content |

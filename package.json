@@ -12,11 +12,19 @@
     "eval": "vitest run",
     "eval:watch": "vitest",
     "eval:ci": "./scripts/eval.sh",
+    "eval:ci:gemini": "MODEL_PROVIDER=gemini ./scripts/eval.sh",
+    "eval:ci:openai": "MODEL_PROVIDER=openai ./scripts/eval.sh",
+    "eval:ci:deepseek": "MODEL_PROVIDER=deepseek ./scripts/eval.sh",
     "gen:dataset": "./scripts/gen-dataset.sh",
+    "gen:dataset:gemini": "MODEL_PROVIDER=gemini ./scripts/gen-dataset.sh",
+    "gen:dataset:openai": "MODEL_PROVIDER=openai ./scripts/gen-dataset.sh",
+    "gen:dataset:deepseek": "MODEL_PROVIDER=deepseek ./scripts/gen-dataset.sh",
     "db:reset": "tsx scripts/reset-db.ts"
   },
   "dependencies": {
+    "@ai-sdk/deepseek": "^2.0.50",
     "@ai-sdk/google": "^3.0.74",
+    "@ai-sdk/openai": "^3.0.86",
     "@mastra/libsql": "^1.10.1",
     "@mastra/memory": "^1.18.0",
     "@mastra/pg": "^1.11.0",
@@ -30,7 +38,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
-    "@mastra/evals": "^1.2.2",
+    "@mastra/evals": "^1.5.1",
     "@types/node": "^22.0.0",
     "eslint": "^9.0.0",
     "prettier": "^3.4.0",

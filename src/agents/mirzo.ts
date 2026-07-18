@@ -1,7 +1,7 @@
 import { Agent } from '@mastra/core/agent'
 import { Memory } from '@mastra/memory'
 import { PostgresStore } from '@mastra/pg'
-import { google } from './provider.js'
+import { chatModel } from './provider.js'
 import { getPgConfig } from '../db/client.js'
 import {
   getUserProfileById,
@@ -92,7 +92,7 @@ export const mirzo = new Agent({
   name: 'Mirzo',
   description: 'Customer support assistant for NovaTel, a mobile operator in Tajikistan.',
   instructions,
-  model: google(process.env.MODEL_NAME ?? 'gemini-3.1-flash-lite'),
+  model: chatModel,
   tools: {
     getUserProfileById,
     getUserProfileByNumber,
