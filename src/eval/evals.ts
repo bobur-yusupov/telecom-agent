@@ -1,9 +1,10 @@
-import { runEvals } from '@mastra/core/evals';
+import { runEvals, type MastraScorer } from '@mastra/core/evals';
+import type { RequestContext } from '@mastra/core/request-context';
 import { checks } from '@mastra/evals/checks';
 import { mirzo } from '../agents/mirzo.js'
 import { scopeEnforcementScorer } from '../eval/scope-enforcement-scorer.js'
 import { languageCorrectnessScorer } from '../eval/language-correctness-scorer.js'
-import { datasetItems } from '../data/dataset.js';
+import { datasetItems, type DatasetItem } from '../data/dataset.js';
 
 
 // ── Single-case example first, matching the shape you pasted ──────────────
@@ -30,8 +31,8 @@ console.log(singleCaseResult.verdict) // 'passed' | 'scored' | 'failed'
 // This is the part that actually matters — looping the pattern above across
 // all 21 dataset items, since each one has different required/forbidden tools.
 
-function buildGates(item: (typeof datasetItems)[number]) {
-    const gates = [checks.noToolErrors()]
+function buildGates(item: DatasetItem) {
+    const gates: MastraScorer[] = [checks.noToolErrors()]
     const traj = item.expectedTrajectory
     if (!traj) return gates
 
@@ -53,7 +54,7 @@ function buildGates(item: (typeof datasetItems)[number]) {
     return gates
 }
 
-const results: { category: string; verdict: string }[] = []
+const results: { category: string; verdict: string | undefined }[] = []
 
 for (const item of datasetItems) {
     const result = await runEvals({
@@ -62,7 +63,10 @@ for (const item of datasetItems) {
             {
                 input: item.input,
                 groundTruth: item.groundTruth,
-                requestContext: item.requestContext,
+                // RunEvalsDataItem wants the RequestContext class, but every consumer here
+                // (language-correctness-scorer, the judge prompts) reads it as a plain
+                // Record and only duck-types the .get() method — a plain object works at runtime.
+                requestContext: item.requestContext as unknown as RequestContext,
             },
         ],
         gates: buildGates(item),
