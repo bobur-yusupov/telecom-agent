@@ -1,6 +1,7 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createDeepSeek } from '@ai-sdk/deepseek'
+import { createAnthropic } from '@ai-sdk/anthropic'
 
 const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GOOGLE_GENERATIVE_AI_API_KEY
 
@@ -10,16 +11,19 @@ const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GOOGLE_GENERATIVE_AI_AP
 export const google = createGoogleGenerativeAI(apiKey ? { apiKey } : {})
 
 // The model under test — flip via MODEL_PROVIDER to compare providers in
-// evals (npm run eval:ci:gemini / :openai / :deepseek) or to run the live
-// bot on a different provider. Powers both src/agents/mirzo.ts and,
+// evals (npm run eval:ci:gemini / :openai / :deepseek / :anthropic) or to run
+// the live bot on a different provider. Powers both src/agents/mirzo.ts and,
 // transitively, any eval that drives the live agent.
-export const MODEL_PROVIDERS = ['gemini', 'openai', 'deepseek'] as const
+export const MODEL_PROVIDERS = ['gemini', 'openai', 'deepseek', 'anthropic'] as const
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number]
 
 const DEFAULT_MODEL_NAMES: Record<ModelProvider, string> = {
   gemini: 'gemini-3.1-flash-lite',
   openai: 'gpt-4.1-mini',
   deepseek: 'deepseek-chat',
+  // Matches the cheap/fast tier the other three defaults use — override with
+  // MODEL_NAME=claude-sonnet-5 / claude-opus-4-8 for a higher-tier comparison.
+  anthropic: 'claude-haiku-4-5',
 }
 
 function resolveModelProvider(): ModelProvider {
@@ -47,6 +51,12 @@ function buildChatModel() {
         process.env.DEEPSEEK_API_KEY ? { apiKey: process.env.DEEPSEEK_API_KEY } : {},
       )
       return deepseek(modelName)
+    }
+    case 'anthropic': {
+      const anthropic = createAnthropic(
+        process.env.ANTHROPIC_API_KEY ? { apiKey: process.env.ANTHROPIC_API_KEY } : {},
+      )
+      return anthropic(modelName)
     }
   }
 }

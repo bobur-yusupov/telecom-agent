@@ -18,6 +18,13 @@ export const PRICING: Record<string, { input: number; output: number }> = {
     
     'deepseek-chat': { input: 0.28, output: 0.42 },
     'deepseek-v4-flash': { input: 0.14, output: 0.28 },
+
+    // Bare aliases, not dated IDs — DEFAULT_MODEL_NAMES.anthropic and MODEL_NAME
+    // overrides both use the alias form (Anthropic's own guidance: never append
+    // a date suffix to an alias), so the pricing key has to match that exactly.
+    'claude-opus-4-8': { input: 5.00, output: 25.00 },
+    'claude-sonnet-5': { input: 3.00, output: 15.00 }, // intro $2.00/$10.00 through 2026-08-31
+    'claude-haiku-4-5': { input: 1.00, output: 5.00 },
 }
 
 /** Returns NaN for an unknown model — surface that, don't silently report $0. */
