@@ -116,9 +116,11 @@ See `docs/SPEC.md` §7.
   `requestCancellation` (rejects `RETENTION_REQUIRED` unless
   `retention_attempted = true`; never cancels the subscription itself — opens a
   `retention`-category ticket for a human agent).
-- **2 unguarded write tools**: `createTicket`, `setRetentionAttempted` (sets the
+- **3 unguarded write tools**: `createTicket`, `setRetentionAttempted` (sets the
   flag `requestCancellation` reads — this is how the retention ladder is enforced
-  in code rather than by prompt compliance).
+  in code rather than by prompt compliance), `linkCustomer` (persists
+  `telegram_user_id` → `customer_id` in `telegram_links`, §4.12 — see "Telegram
+  behavior" below).
 
 ## Skills (loaded on demand, `SKILL.md` per skill)
 
@@ -161,7 +163,8 @@ activation, backing `listAddons`/`purchaseAddon`), `usage`, `transactions`,
 store — token, args_hash, expires_at, consumed_at), `audit_log` (append-only, no
 UPDATE/DELETE grants; outcome ∈
 `read | proposed | committed | verified | rejected | verify_failed`), `tickets`,
-`idempotency_keys`.
+`idempotency_keys`, `telegram_links` (`telegram_user_id` → `customer_id`,
+populated by `linkCustomer`, §14.6).
 
 ## Evaluation
 
@@ -200,7 +203,11 @@ This exists because **Telegram's Bot API has no incoming "user is typing"
 signal at all** — `sendChatAction` is send-only, bot → user — so batching runs
 on a fixed timer, not a stop-typing event. The debounce buffer is
 per-thread/in-memory, a deliberate narrow exception to the "state lives in
-Postgres" principle above (ephemeral, self-healing on restart). Full design in
+Postgres" principle above (ephemeral, self-healing on restart). Session
+identity is the opposite case — real state, persisted: the adapter resolves
+`telegram_user_id` → `customer_id` from `telegram_links` before invoking the
+agent; if unresolved, the agent asks for a phone number and calls
+`lookupCustomer` then `linkCustomer` before any other tool. Full design in
 `docs/SPEC.md` §14; the underlying adapter calls (`thread.startTyping()`,
 `thread.post()`) are in `docs/MASTRA.md` §8.
 

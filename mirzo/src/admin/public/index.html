@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Mirzo — Admin</title>
+<style>
+  :root {
+    --grey: #8a8f98; --amber: #b58900; --green: #1a7f37; --red: #cf222e;
+    --bg: #0f1115; --panel: #171a21; --border: #262a33; --text: #e6e8eb; --muted: #9aa0aa;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bg); color: var(--text); }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  main { display: grid; grid-template-columns: 2fr 1fr; grid-template-rows: auto 1fr; gap: 12px; padding: 12px; height: calc(100vh - 45px); }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; }
+  .panel h2 { margin: 0; padding: 8px 12px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1px solid var(--border); }
+  .panel .body { overflow-y: auto; padding: 8px 12px; }
+  #audit { grid-row: 1 / 3; }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { padding: 3px 6px; text-align: left; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--panel); }
+  .outcome { font-weight: 600; }
+  .outcome-read { color: var(--grey); }
+  .outcome-proposed { color: var(--amber); }
+  .outcome-committed, .outcome-verified { color: var(--green); }
+  .outcome-rejected, .outcome-verify_failed { color: var(--red); }
+  .args { color: var(--muted); max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<header>Mirzo — admin panel</header>
+<main>
+  <section class="panel" id="audit">
+    <h2>Audit log</h2>
+    <div class="body"><table><thead><tr><th>time</th><th>tool</th><th>outcome</th><th>reason</th></tr></thead><tbody id="audit-body"></tbody></table></div>
+  </section>
+  <section class="panel">
+    <h2>Pending actions</h2>
+    <div class="body"><table><thead><tr><th>tool</th><th>customer</th><th>expires in</th></tr></thead><tbody id="pending-body"></tbody></table></div>
+  </section>
+  <section class="panel">
+    <h2>Customer state</h2>
+    <div class="body"><table><thead><tr><th>name</th><th>balance</th><th>plan</th><th>sub status</th></tr></thead><tbody id="customers-body"></tbody></table></div>
+  </section>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+  async function refreshAudit() {
+    const rows = await fetch('/api/audit').then((r) => r.json());
+    $('audit-body').innerHTML = rows
+      .map(
+        (r) => `<tr>
+          <td>${new Date(r.createdAt).toLocaleTimeString()}</td>
+          <td>${esc(r.toolName)}</td>
+          <td class="outcome outcome-${r.outcome}">${r.outcome}</td>
+          <td class="args">${esc(r.rejectReason ?? '')}</td>
+        </tr>`,
+      )
+      .join('');
+  }
+
+  async function refreshPending() {
+    const rows = await fetch('/api/pending').then((r) => r.json());
+    $('pending-body').innerHTML = rows
+      .map((r) => {
+        const secondsLeft = Math.max(0, Math.round((new Date(r.expiresAt) - Date.now()) / 1000));
+        return `<tr><td>${esc(r.toolName)}</td><td>${esc(r.customerId).slice(0, 8)}</td><td>${secondsLeft}s</td></tr>`;
+      })
+      .join('');
+  }
+
+  async function refreshCustomers() {
+    const rows = await fetch('/api/customers').then((r) => r.json());
+    $('customers-body').innerHTML = rows
+      .map(
+        (c) => `<tr>
+          <td>${esc(c.name)}</td>
+          <td>${esc(c.balance)}</td>
+          <td>${esc(c.planName ?? '—')}</td>
+          <td>${esc(c.subscriptionStatus ?? '—')}</td>
+        </tr>`,
+      )
+      .join('');
+  }
+
+  async function tick() {
+    await Promise.all([refreshAudit(), refreshPending(), refreshCustomers()]);
+  }
+
+  tick();
+  setInterval(tick, 2000);
+</script>
+</body>
+</html>

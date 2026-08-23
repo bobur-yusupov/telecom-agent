@@ -40,7 +40,7 @@ Authorization for destructive actions belongs in code, inside `tool.execute()`, 
 - Three skills
 - 10 read tools
 - 4 guarded write tools
-- 2 unguarded write tools
+- 3 unguarded write tools
 - 2 languages (Uzbek & English)
 - Evals
 - Admin panel for observing tickets and audit logs
@@ -236,6 +236,16 @@ Cancellation escalations from `requestCancellation` use `category = 'retention'`
 | `result` | jsonb |
 | `created_at` | timestamptz |
 
+### 4.12 `telegram_links`
+
+Maps a Telegram identity to a resolved customer. See §14.6 for the onboarding flow that populates it.
+
+| Column | Type | Notes |
+|---|---|---|
+| `telegram_user_id` | text PK | Telegram's numeric user id, stored as text |
+| `customer_id` | uuid FK | |
+| `linked_at` | timestamptz | |
+
 ---
 
 ## 5. Tools
@@ -274,6 +284,7 @@ A precondition failure returns a rejection before any token exists. The agent ca
 |---|---|
 | `createTicket` | escalation; returns ticket ID |
 | `setRetentionAttempted` | sets the flag `requestCancellation` reads |
+| `linkCustomer` | `{ telegramUserId, customerId }` → upserts `telegram_links` (§4.12); see §14.6 |
 
 ---
 
@@ -432,7 +443,7 @@ Constraints occupy the first position, tone the last.
 
 1. **Constraints** — scope boundaries; never claim success unless a tool returned `verified: true`; never invent balances, prices, or policies; destructive actions always require a token.
 2. **Identity** — Mirzo, NovaTel customer service.
-3. **Operating rules** — tool selection, skill triggers, escalation conditions, confirmation presentation format.
+3. **Operating rules** — tool selection, skill triggers, escalation conditions, confirmation presentation format, identity resolution when `requestContext` has no `customerId` yet (§14.6).
 4. **Tone** — warm, brief, plain language; mirror the customer's language (Uzbek or English).
 
 ---
@@ -625,3 +636,15 @@ doesn't need to survive a restart.
   that isn't worth it for a demo. Revisit later.
 - Persisting the debounce buffer to Postgres — see §14.3's rationale for
   keeping it in-memory.
+
+### 14.6 Session identity
+
+The adapter resolves `telegram_user_id` → `customer_id` from `telegram_links`
+(§4.12) before invoking the agent. Already linked → `customerId` is set on
+`requestContext`, no extra step, no re-asking. Not yet linked →
+`requestContext.customerId` is absent, and §9's operating rules require the
+agent to ask for a phone number, call `lookupCustomer`, then `linkCustomer` to
+persist the match before touching any tool that needs a `customerId`. A
+`lookupCustomer` miss (no match for that phone) is handled in conversation like
+any other read-tool result — it is not a guard rejection, since `lookupCustomer`
+is unguarded (§5.1).

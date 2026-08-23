@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mirzo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mirzo}
+      POSTGRES_DB: ${POSTGRES_DB:-mirzo}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mirzo} -d ${POSTGRES_DB:-mirzo}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      target: dev
+    env_file:
+      - .env
+    environment:
+      # computed here, not read from .env, so it always resolves to the
+      # `postgres` service regardless of what DATABASE_URL is set to on the host
+      DATABASE_URL: postgres://${POSTGRES_USER:-mirzo}:${POSTGRES_PASSWORD:-mirzo}@postgres:5432/${POSTGRES_DB:-mirzo}
+      # bind-mount file events don't always propagate cleanly (esp. Docker
+      # Desktop on macOS/Windows); polling makes tsx watch reliable everywhere
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "${PORT:-3001}:3001"
+      - "4111:4111" # mastra dev / Studio
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - /app/node_modules # anonymous volume: keeps the image's node_modules from being shadowed by the bind mount above
+
+volumes:
+  pgdata:
