@@ -41,7 +41,7 @@ app.get('/api/customers', async (c) => {
 
 app.use('/*', serveStatic({ root: './src/admin/public' }));
 
-const port = Number(process.env.PORT ?? 3001);
+const port = Number(process.env.ADMIN_PORT ?? 3001);
 export function startAdminServer() {
   serve({ fetch: app.fetch, port });
   console.log(`[admin] listening on :${port}`);

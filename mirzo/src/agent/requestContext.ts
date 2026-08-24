@@ -1,17 +1,13 @@
-// Minimal get/set bag matching the shape tools and the system prompt read
-// (ctx.requestContext.get(...)) — see MASTRA.md §3. Constructed fresh per
-// Telegram turn in src/telegram/adapter.ts.
-export interface RequestContext {
-  get: (key: string) => unknown;
-  set: (key: string, value: unknown) => void;
-}
+import { RequestContext } from '@mastra/core/request-context';
 
+export type { RequestContext };
+
+// Thin convenience wrapper around Mastra's real RequestContext class
+// (verified against the published .d.ts — this replaced an earlier
+// hand-rolled {get, set} stand-in whose shape was a guess). Used directly by
+// every eval case (src/eval/context.ts); on the Telegram side, the
+// framework provides its own RequestContext per message instead (see
+// src/telegram/handlers.ts, MASTRA.md §8).
 export function createRequestContext(values: Record<string, unknown>): RequestContext {
-  const map = new Map(Object.entries(values));
-  return {
-    get: (key) => map.get(key),
-    set: (key, value) => {
-      map.set(key, value);
-    },
-  };
+  return new RequestContext(Object.entries(values));
 }

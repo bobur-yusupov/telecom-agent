@@ -30,8 +30,9 @@ services:
       # Desktop on macOS/Windows); polling makes tsx watch reliable everywhere
       CHOKIDAR_USEPOLLING: "true"
     ports:
-      - "${PORT:-3001}:3001"
-      - "4111:4111" # mastra dev / Studio
+      - "${ADMIN_PORT:-3001}:3001"
+      - "4111:4111" # mastra dev / Studio — do not set a generic PORT env var,
+                    # mastra dev reads it too and will collide with ADMIN_PORT
     depends_on:
       postgres:
         condition: service_healthy

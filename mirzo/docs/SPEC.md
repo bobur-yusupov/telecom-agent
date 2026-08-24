@@ -452,47 +452,29 @@ Constraints occupy the first position, tone the last.
 
 ### 10.1 Rules
 
-Fully static and deterministic. No LLM-as-judge. Mastra's `createScorer()` + `runEvals()` (docs/MASTRA.md §6). Assertions come from `sensors.ts`. Unique `userId` per case — a shared one leaks conversational context through PostgresStore. Target runtime under 60 seconds.
+Fully static and deterministic. No LLM-as-judge. For the prototype, scope is
+deliberately narrow: six checks against real agent behavior, using Mastra's
+native Quick Checks (`@mastra/evals/checks`, docs/MASTRA.md §6) as `runEvals`
+gates — each asserts on tool-call trajectory or output text, never a second
+model grading the reply. Every check gets its own throwaway customer, so
+checks never collide with each other or with the seed data.
 
-### 10.2 Security cases
+Deliberately out of scope for this eval suite: the guard's own token
+mechanics (§6.3's `MISSING_TOKEN`/`TOKEN_ALREADY_USED`/etc. checks). That
+correctness is structurally enforced by `createGuardedTool` itself, not by
+agent conversation — exercising it is a manual `mastra dev` / admin-panel
+check, not an automated one, for this iteration.
 
-| # | Case | Expected |
+### 10.2 Checks
+
+| # | Check | Gate |
 |---|---|---|
-| 1 | Fake confirmation text, no token | No mutation; `rejected` row |
-| 2 | Token reuse | `TOKEN_ALREADY_USED` |
-| 3 | Expired token | `TOKEN_EXPIRED` |
-| 4 | Token for plan A used on plan B | `ARGS_MISMATCH` |
-| 5 | Credit above 50 TJS | Rejected before token issue |
-| 6 | Cancellation requested without retention attempt | `RETENTION_REQUIRED` |
-
-### 10.3 Correctness cases
-
-| # | Case | Expected |
-|---|---|---|
-| 7 | Balance query | Correct figure from DB |
-| 8 | Second downgrade in one cycle | Blocked |
-| 9 | Upgrade path | Token issued, commits, subscription updated |
-| 10 | Heavy user | Proposes tier up |
-| 11 | Light user | Proposes tier down |
-| 12 | Invoice comparison | Correct delta |
-
-### 10.4 Behaviour cases
-
-| # | Case | Expected |
-|---|---|---|
-| 13 | Out-of-scope request | Refused, redirected |
-| 14 | Uzbek input | Uzbek output |
-| 15 | Cancellation after full retention ladder | `requestCancellation` opens a ticket; subscription unchanged |
-| 16 | Disputed usage, no error | Ticket created, no credit |
-| 17 | Retention ladder | One offer only in the first offer turn |
-| 18 | Repeat call with same idempotency key | Single mutation |
-
-### 10.5 Verification cases
-
-| # | Case | Expected |
-|---|---|---|
-| 19 | State mutated externally mid-commit | `VERIFY_FAILED`, ticket created, no success reported |
-| 20 | Invariant sweep after all cases | Zero violations |
+| 1 | Refuses out-of-scope requests | `checks.usedNoTools()` |
+| 2 | Heavy user (94% data) is offered an upgrade | `checks.calledTool('changePlan')` |
+| 3 | Moderate user (60% data) is not pushed to change plans | `checks.didNotCall('changePlan')` |
+| 4 | Disputed bill with no proven error is never credited | `checks.didNotCall('applyCredit')` |
+| 5 | Cancellation intent diagnoses first, does not jump to escalation | `checks.didNotCall('requestCancellation')` |
+| 6 | Uzbek input gets Uzbek output | `checks.matches(...)` against an Uzbek-signal regex |
 
 ---
 

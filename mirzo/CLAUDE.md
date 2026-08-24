@@ -168,17 +168,16 @@ populated by `linkCustomer`, §14.6).
 
 ## Evaluation
 
-Fully static and deterministic — no LLM-as-judge. `createScorer()` +
-`runEvals()` (see `docs/MASTRA.md` §6), assertions from `sensors.ts`. Each eval
-case uses a unique `userId` (a shared one leaks
-conversational context through PostgresStore). Target runtime under 60s. Spec §10
-enumerates the required cases across four groups: security (fake confirmation,
-token reuse, expired token, args-mismatch, over-limit credit, cancel without
-retention), correctness (balance query, downgrade limit, upgrade path, usage-based
-recommendations, invoice diff), behaviour (out-of-scope refusal, language
-matching, dispute-without-credit, retention ladder pacing, idempotent retry), and
-verification (sensor catches externally-mutated state mid-commit; a full
-invariant sweep after all cases passes with zero violations).
+Deliberately narrow for the prototype: six checks against real agent
+behavior (`npm run eval`), each a native Mastra Quick Check
+(`@mastra/evals/checks`) used as a `runEvals` gate — zero-LLM, asserts on
+tool-call trajectory or output text, never a second model grading the reply.
+Covers scope refusal, usage-based plan recommendations (both directions),
+never-crediting an unproven dispute, not jumping straight to cancellation,
+and Uzbek language mirroring (Spec §10.2). Each check gets its own throwaway
+customer. The guard's own token mechanics (§6.3) are *not* covered by this
+suite — that correctness is structural (`createGuardedTool`, §6), verified
+manually via `mastra dev` / the admin panel for now, not by an automated check.
 
 ## Admin panel
 

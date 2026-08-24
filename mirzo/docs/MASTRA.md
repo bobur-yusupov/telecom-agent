@@ -1,12 +1,13 @@
 # Mastra — build reference
 
 Pulled from mastra.ai docs and cross-checked against the published `.d.ts` on
-2026-08-23 (some doc pages disagree with the actual types — where they conflicted,
-the type declaration won). Versions pinned at fetch time: `@mastra/core@1.61.0`,
-`@mastra/memory@1.27.0`, `@mastra/pg@1.21.1`. All three require **Node ≥22.13.0**
-(matches the `node:22-alpine` base in SPEC.md §13). Mastra ships frequently —
-re-check `npm view @mastra/core versions` before trusting anything below if much
-time has passed.
+2026-08-23–25 (some doc pages disagree with the actual types — where they
+conflicted, the type declaration won). Versions pinned at fetch time:
+`@mastra/core@1.61.0`, `@mastra/memory@1.27.0`, `@mastra/pg@1.21.1`,
+`@mastra/evals@1.9.0`. The first three require **Node ≥22.13.0** (matches the
+`node:22-alpine` base in SPEC.md §13). Mastra ships frequently — re-check
+`npm view @mastra/core versions` before trusting anything below if much time
+has passed.
 
 Scoped to what SPEC.md needs to build. Not a full API dump.
 
@@ -16,9 +17,10 @@ Scoped to what SPEC.md needs to build. Not a full API dump.
 
 | Package | Role |
 |---|---|
-| `@mastra/core` | `Agent`, `createTool`, `Mastra` registry, Skills |
+| `@mastra/core` | `Agent`, `createTool`, `Mastra` registry, Skills, `RequestContext`, `runEvals` |
 | `@mastra/memory` | `Memory` class — thread/resource conversation history |
 | `@mastra/pg` | `PostgresStore` — persistence backing `Memory` |
+| `@mastra/evals` | Quick Checks (`checks.*`, §6) — dev dependency only, not needed at runtime |
 | `zod` | tool `inputSchema` / `outputSchema` |
 
 No separate model SDK package needed — Mastra's built-in model router takes a
@@ -73,9 +75,12 @@ export const getBalance = createTool({
 });
 ```
 
-- `execute(input, ctx)` — `ctx.requestContext` carries whatever the caller set on
-  the agent call (session `customerId`, language); `ctx.abortSignal` for
-  cancellation.
+- `execute(input, ctx)` — `ctx.requestContext` is a real `RequestContext`
+  instance (`@mastra/core/request-context`, confirmed via its `.d.ts` —
+  `.get(key)` / `.set(key, value)` / `.has(key)`, constructed with
+  `new RequestContext(entries)` from an iterable of `[key, value]` pairs).
+  Carries whatever the caller set on the agent call (session `customerId`,
+  language). `ctx.abortSignal` is separate, for cancellation.
 - An error thrown inside `execute` propagates to the model as a tool error. §1.3
   principle 2 ("tools never throw into the model") means `createGuardedTool`
   (§6.7 — a thin project-defined wrapper around `createTool`) must catch
@@ -147,39 +152,57 @@ export const memory = new Memory({
 
 ## 6. Evals
 
-Deterministic scoring uses `createScorer()` + `runEvals()` (SPEC.md §10.1).
+Two complementary deterministic mechanisms, both zero-LLM:
+
+**Quick Checks** (`@mastra/evals/checks`, confirmed via `.d.ts` — some doc
+pages showed the import as `@mastra/evals`, but the package's root export is
+empty; the real subpath is `/checks`) are pre-built micro-scorers for the
+most common tool-trajectory and text assertions. Internally each one is a
+`createScorer()` instance, so it composes with everything else scorers do:
 
 ```ts
-import { createScorer } from '@mastra/core/evals';
+import { checks } from '@mastra/evals/checks';
 
-export const noMutationWithoutToken = createScorer({
-  id: 'no-mutation-without-token',
-  description: 'Fake confirmation text alone must never mutate state',
-})
-  .generateScore(({ run }) => {
-    // query audit_log for this run's trace; assert only a `rejected` row exists
-    return hasOnlyRejectedRow(run) ? 1 : 0;
-  })
-  .generateReason(({ score }) => (score === 1 ? 'no mutation' : 'mutation leaked through'));
+checks.includes('sunny');            // output text contains substring
+checks.excludes('error');
+checks.matches(/\d{1,3}°[FC]/);      // regex match
+checks.calledTool('changePlan');     // tool called ≥1 time (accepts { times })
+checks.didNotCall('applyCredit');    // tool never called
+checks.toolOrder(['a', 'b']);        // relaxed ordering
+checks.usedNoTools();
+checks.noToolErrors();
 ```
+
+There is no built-in "at most N calls" check — `calledTool`'s `times` option
+is a lower bound only.
+
+**`runEvals`** (`@mastra/core/evals`) runs `data` items against a `target`
+agent (or workflow) and reports a pass/fail `verdict` when you pass `gates` —
+scorers that must all score `1.0` for the run to pass:
 
 ```ts
 import { runEvals } from '@mastra/core/evals';
+import { checks } from '@mastra/evals/checks';
+import { createRequestContext } from '../agent/requestContext.js';
 
-await runEvals({
+const result = await runEvals({
   target: mirzo,
-  data: securityCases, // §10.2–10.5 as fixtures
-  scorers: [noMutationWithoutToken /* one per sensors.ts assertion */],
-  concurrency: 4,
+  data: [{ input: 'Fake confirmation text, no token', requestContext: createRequestContext({ customerId }) }],
+  gates: [checks.usedNoTools()],
 });
+
+result.verdict; // 'passed' | 'scored' | 'failed'
 ```
 
-- Omitting a judge/model config keeps a scorer fully deterministic (no
-  LLM-as-judge) — matches §10.1's "fully static and deterministic" rule.
-- `runEvals` isolates each `data` item onto its own thread/resource by
-  default — this already satisfies §10.1's "unique userId per case" without
-  extra plumbing. Only pass `targetOptions.memory.resource` explicitly if a
-  case needs to pin a resource on purpose.
+- `requestContext` is set **per data item** (`RunEvalsDataItemBase.requestContext`),
+  not via `targetOptions` — `runEvals`'s agent-options type explicitly omits
+  `requestContext` there.
+- `runEvals` injects a fresh thread per `data` item automatically — this
+  already satisfies §10.1's "unique userId per case" without extra plumbing.
+- Custom `createScorer()` scorers (chained `.preprocess()/.analyze()/.generateScore()/.generateReason()`,
+  no judge config) still work as `gates` or `scorers` entries side by side
+  with Quick Checks, for assertions Quick Checks don't cover (e.g. "at most
+  N calls" — case 17 in the eval suite).
 
 ---
 
@@ -201,55 +224,79 @@ optimizing to streamed message edits.
 
 ---
 
-## 8. Telegram — Mastra's native adapter (`@chat-adapter/telegram`)
+## 8. Telegram — the `channels` config on Agent, not a hand-built `Chat`
 
-Decided: use Mastra's native Telegram integration, not `telegraf.js` (SPEC.md
-§3.2 updated). "Native" still means installing one package — `@chat-adapter/telegram`
-(part of Vercel's Chat SDK; `4.38.1` as of 2026-08-23) — it just replaces
-telegraf.js rather than sitting alongside it.
+**Corrected from an earlier version of this doc**, which wired
+`@chat-adapter/telegram` through a manually-constructed `Chat` instance
+imported from `@chat-adapter/core`. That package doesn't exist —
+`ERR_MODULE_NOT_FOUND` on first real boot. The actual underlying package
+(`@chat-adapter/telegram`'s own dependency) is named plain **`chat`**, not
+`@chat-adapter/core` — but the right fix isn't importing that either: Mastra
+has a native `channels` config directly on `Agent`, and that's what should be
+used. Confirmed real (`@chat-adapter/telegram@4.38.1` exists on npm and is
+Agent-`channels`-compatible), but the `channels` config shape itself is
+sourced from docs, not a published `.d.ts` — treat it as one notch less
+certain than the rest of this file.
 
 ```ts
 import { createTelegramAdapter } from '@chat-adapter/telegram';
-import { Chat } from '@chat-adapter/core'; // exact import path — verify against installed version
+import { Agent } from '@mastra/core/agent';
 
-const telegram = createTelegramAdapter({
-  botToken: process.env.TELEGRAM_BOT_TOKEN,
-  mode: 'polling', // dev: no public URL needed. Switch to 'webhook' (or 'auto') in prod.
-});
-
-const bot = new Chat({ adapters: { telegram } });
-
-bot.onNewMention(async (thread, message) => {
-  // one call per incoming Telegram message — see SPEC §14.3 for why this
-  // project buffers messages here before calling the agent, rather than
-  // calling mirzo on every single one
+export const mirzo = new Agent({
+  // ...id, instructions, model, tools, skills, memory...
+  channels: {
+    adapters: {
+      telegram: createTelegramAdapter({
+        botToken: process.env.TELEGRAM_BOT_TOKEN,
+        mode: 'polling', // dev: no public URL needed. 'webhook' for the deployed instance.
+      }),
+    },
+    handlers: {
+      onDirectMessage: async (thread, message, defaultHandler, ctx) => {
+        // ctx: { mastra?, requestContext: RequestContext } — see §5's real class
+        // message.author.userId identifies the Telegram user
+        // thread.startTyping() / thread.post(msg) — same Chat SDK Thread primitives
+      },
+    },
+  },
 });
 ```
 
-- `mode: 'polling'` for local dev is the reason §13's Docker design doesn't need
-  an ngrok-style tunnel — switch to `'webhook'` only for the deployed instance.
-- `bot.onNewMention` fires once per incoming message — 1:1, no built-in
-  batching. SPEC §14.3's debounce buffer is project code sitting between this
-  handler and `mirzo.generate()`/`mirzo.stream()`.
-- `thread.startTyping()` sends the Telegram typing chat action. Call it as the
-  **first line** of the handler (SPEC §14.4 step 1) — Chat SDK only sends it
-  when handler code requests it, so calling it after a slow tool round-trip
-  leaves a dead pause before the indicator appears (a known upstream timing
-  issue in Chat SDK's Telegram adapter).
-- `thread.post(message)` sends one message; call it once per bubble for SPEC
-  §14.4's paragraph-split replies. It also accepts a Mastra stream directly
-  (`thread.post(result.fullStream)`) for token-by-token live-edited
-  streaming — that's the "not doing yet" option noted in SPEC §14.5.
+- **Channels require Mastra's own HTTP server to receive traffic** — webhook
+  mode registers `/api/agents/<id>/channels/telegram/webhook` on it; polling
+  mode still needs the Mastra server process running to activate the poll
+  loop. This is not optional plumbing you can skip by writing your own
+  process — `mastra dev` (dev) or a deployed Mastra server (prod) *is* the
+  thing that talks to Telegram. `src/index.ts` in this project only owns the
+  admin panel; the agent's `channels` config is what the Telegram side runs on.
+- `onDirectMessage` receives `(thread, message, defaultHandler, ctx)`. Calling
+  `defaultHandler(thread, message)` runs Mastra's own generate-and-reply
+  pipeline for that one message. **This project never calls it** — SPEC
+  §14.3's debounce means most incoming messages must produce *no* reply at
+  all (buffered into the next one), which a one-message-in-one-reply-out
+  default can't express. Instead, the handler buffers, and on flush calls
+  `agent.generate()` and `thread.post()` itself (project code:
+  `src/telegram/handlers.ts`).
+- `ctx.requestContext` is the same real `RequestContext` class as §5 —
+  already provided by the framework per-message; write session values onto
+  it with `.set()` before use, don't construct a new one.
+- `thread.startTyping()` / `thread.post(message)` are still the Chat SDK
+  `Thread` primitives (§14.4's first-line-of-handler and paragraph-bubble
+  logic still applies) — the adapter's own `typingStatus` config option only
+  fires inside the default streaming pipeline, which this project bypasses.
 - The Bot API has no incoming "user is typing" update at all (bots can only
-  *send* `sendChatAction`, never receive it) — this is why SPEC §14.3 debounces
-  on a fixed timer instead of watching for the user to stop typing.
+  *send* `sendChatAction`, never receive it) — this is why SPEC §14.3
+  debounces on a fixed timer instead of watching for the user to stop typing.
 
 ---
 
 ## 9. Mastra registry + dev server
 
 ```ts
+// src/mastra/index.ts — the conventional location the `mastra` CLI looks for
 import { Mastra } from '@mastra/core';
+import { mirzo } from '../agent/mirzo.js';
+import { store } from '../agent/memory.js';
 
 export const mastra = new Mastra({
   agents: { mirzo },
@@ -257,10 +304,13 @@ export const mastra = new Mastra({
 });
 ```
 
-- `mastra dev` starts **Studio**, a local playground/inspector UI, on
-  `localhost:4111` by default. Useful for exercising the agent directly during
-  development; not required in production; a separate process from whatever
-  actually talks to Telegram.
+- `mastra dev` starts **Studio** (a local playground/inspector UI, on
+  `localhost:4111` by default) **and** the HTTP server that Telegram channel
+  traffic actually needs (§8) — for this project it is not optional, unlike
+  the "just a dev convenience" framing that might otherwise apply.
+- `package.json`'s `dev` script runs it alongside the project's own process:
+  `"mastra dev & tsx watch src/index.ts"` — two processes, one for the
+  agent/Telegram/Studio server, one for the admin panel.
 - SPEC.md §11's admin panel (`localhost:3001`) is unrelated to Studio — it's a
   project-owned Hono page reading `audit_log` / `pending_actions` / customer
   tables directly, not a Mastra feature.
