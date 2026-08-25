@@ -1,9 +1,22 @@
+import { join } from 'node:path';
 import { createTelegramAdapter } from '@chat-adapter/telegram';
 import { Agent } from '@mastra/core/agent';
 import { handleTelegramMessage } from '../telegram/handlers.js';
 import { tools } from '../tools/index.js';
 import { memory } from './memory.js';
 import { buildSystemPrompt, type PromptRequestContext } from './systemPrompt.js';
+
+// Absolute, not relative: `mastra dev` spawns the actual server with its cwd
+// set to `.mastra/output/public`, not the project root (confirmed by
+// inspecting the running process's env — `MASTRA_PROJECT_ROOT` is also *not*
+// the project root, it points one level too shallow, at `.mastra`), and the
+// dev/build bundle flattens this file into `.mastra/output/`, so even a path
+// built from this file's own location wouldn't reach `src/`. `INIT_CWD` is
+// npm's own "directory `npm run` was invoked from" — set once by the
+// top-level `npm run dev`/`npm run eval` and inherited by every process it
+// spawns — which is what actually stays put at the project root.
+const projectRoot = process.env.INIT_CWD ?? process.cwd();
+const skillsDir = join(projectRoot, 'src', 'skills');
 
 export const mirzo = new Agent({
   id: 'mirzo',
@@ -13,9 +26,9 @@ export const mirzo = new Agent({
   model: 'deepseek/deepseek-chat',
   tools,
   skills: [
-    './src/skills/billing-dispute-resolution',
-    './src/skills/plan-change-eligibility',
-    './src/skills/retention-playbook',
+    join(skillsDir, 'billing-dispute-resolution'),
+    join(skillsDir, 'plan-change-eligibility'),
+    join(skillsDir, 'retention-playbook'),
   ],
   memory,
   // SPEC.md §14, MASTRA.md §8 — native channel, not a hand-rolled Chat SDK

@@ -3,7 +3,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { and, desc, eq, gt, isNull } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { db } from '../db/client.js';
-import { auditLog, customers, pendingActions, plans, subscriptions } from '../db/schema.js';
+import { auditLog, customers, pendingActions, plans, subscriptions, tickets } from '../db/schema.js';
 
 // SPEC.md §11 — read-only, no auth, 2s polling from the client.
 const app = new Hono();
@@ -36,6 +36,22 @@ app.get('/api/customers', async (c) => {
     .from(customers)
     .leftJoin(subscriptions, eq(subscriptions.customerId, customers.id))
     .leftJoin(plans, eq(plans.id, subscriptions.planId));
+  return c.json(rows);
+});
+
+app.get('/api/tickets', async (c) => {
+  const rows = await db
+    .select({
+      id: tickets.id,
+      category: tickets.category,
+      summary: tickets.summary,
+      createdAt: tickets.createdAt,
+      customerName: customers.name,
+    })
+    .from(tickets)
+    .innerJoin(customers, eq(customers.id, tickets.customerId))
+    .where(eq(tickets.status, 'open'))
+    .orderBy(desc(tickets.createdAt));
   return c.json(rows);
 });
 
